@@ -6,8 +6,18 @@ Reads ticker symbols from your [Google Sheet](https://docs.google.com/spreadshee
 
 | Output | Source | Use for analysis |
 |--------|--------|------------------|
-| `{TICKER}_{Company}_financials.xlsx` | Yahoo Finance | Income statement, balance sheet, cash flow, plus overview metrics (P/E, ROE, debt/equity, FCF, etc.) |
+| `{TICKER}_{Company}_financials.xlsx` | Yahoo Finance | Annual **and quarterly** income, balance sheet, cash flow, plus overview metrics |
 | `SEC_10-K/` (optional) | SEC EDGAR | Last N annual reports (US-listed companies only) |
+
+### Non-US / global companies
+
+| Approach | Best for | Notes |
+|----------|----------|--------|
+| **Yahoo Finance** (default) | Most tickers with exchange suffix | Use `IFX.DE`, `3750.HK`, `AZN.L` — quarterly data is included automatically |
+| **FMP** (optional) | Backup when Yahoo quarterly is empty | Set `FMP_API_KEY` in `.env` |
+| **SEC 20-F** | Foreign companies with US listing | Not implemented as spreadsheets; use annual PDF via SEC if needed |
+
+Keep the **home exchange suffix** on tickers in your sheet (e.g. `IFX.DE` not bare `IFX`).
 
 Each ticker gets its own subfolder on Drive.
 

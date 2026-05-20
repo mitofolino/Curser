@@ -6,7 +6,12 @@ from pathlib import Path
 import pandas as pd
 import yfinance as yf
 
-from config import SEC_EMAIL
+from config import DOWNLOAD_QUARTERLY, FMP_API_KEY, SEC_EMAIL
+from international import (
+    fetch_fmp_statement,
+    is_non_us_ticker,
+    yahoo_symbol_candidates,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -16,11 +21,11 @@ STATEMENTS = (
     ("cash_flow", "cashflow"),
 )
 
-# Sheet ticker -> Yahoo symbol (ETFs / UCITS often need exchange suffix)
-YAHOO_ALIASES: dict[str, str] = {
-    "SWDA": "SWDA.L",
-    "IUSA": "IUSA.L",
-}
+QUARTERLY_STATEMENTS = (
+    ("income_statement_quarterly", "quarterly_income_stmt"),
+    ("balance_sheet_quarterly", "quarterly_balance_sheet"),
+    ("cash_flow_quarterly", "quarterly_cashflow"),
+)
 
 ETF_INFO_FIELDS = (
     "longName",
@@ -49,10 +54,6 @@ def _safe_df(data) -> pd.DataFrame | None:
     if isinstance(data, pd.DataFrame) and not data.empty:
         return data
     return None
-
-
-def _yahoo_symbol(ticker: str) -> str:
-    return YAHOO_ALIASES.get(ticker.upper(), ticker)
 
 
 FUND_QUOTE_TYPES = frozenset({"ETF", "MUTUALFUND"})
@@ -85,17 +86,7 @@ def _export_etf_workbook(ticker: str, info: dict, out_dir: Path) -> Path | None:
     return path
 
 
-def download_statements(ticker: str, out_dir: Path) -> Path | None:
-    """Export annual financial statements to one Excel workbook."""
-    out_dir.mkdir(parents=True, exist_ok=True)
-    yahoo = _yahoo_symbol(ticker)
-    stock = yf.Ticker(yahoo)
-    info = {}
-    try:
-        info = stock.info or {}
-    except Exception as e:
-        logger.warning("%s: could not fetch info: %s", ticker, e)
-
+def _collect_yahoo_sheets(stock: yf.Ticker) -> dict[str, pd.DataFrame]:
     sheets: dict[str, pd.DataFrame] = {}
     for label, attr in STATEMENTS:
         try:
@@ -103,7 +94,63 @@ def download_statements(ticker: str, out_dir: Path) -> Path | None:
             if df is not None:
                 sheets[label] = df
         except Exception as e:
-            logger.warning("%s: %s failed: %s", ticker, label, e)
+            logger.warning("Yahoo %s failed: %s", label, e)
+    if DOWNLOAD_QUARTERLY:
+        for label, attr in QUARTERLY_STATEMENTS:
+            try:
+                df = _safe_df(getattr(stock, attr, None))
+                if df is not None:
+                    sheets[label] = df
+            except Exception as e:
+                logger.warning("Yahoo %s failed: %s", label, e)
+    return sheets
+
+
+def _fill_fmp_quarterly_gaps(
+    ticker: str, symbol: str, sheets: dict[str, pd.DataFrame]
+) -> None:
+    """Use FMP for missing quarterly tabs on non-US names (optional API key)."""
+    if not FMP_API_KEY or not is_non_us_ticker(ticker):
+        return
+    fmp_map = {
+        "income_statement_quarterly": "income_statement",
+        "balance_sheet_quarterly": "balance_sheet",
+        "cash_flow_quarterly": "cash_flow",
+    }
+    for sheet_name, fmp_type in fmp_map.items():
+        if sheet_name in sheets:
+            continue
+        df = fetch_fmp_statement(
+            symbol, fmp_type, api_key=FMP_API_KEY, period="quarter"
+        )
+        if df is not None:
+            sheets[sheet_name] = df
+            logger.info("%s: filled %s from FMP (%s)", ticker, sheet_name, symbol)
+
+
+def download_statements(ticker: str, out_dir: Path) -> Path | None:
+    """Export annual and quarterly financial statements to one Excel workbook."""
+    out_dir.mkdir(parents=True, exist_ok=True)
+    sheets: dict[str, pd.DataFrame] = {}
+    info: dict = {}
+    yahoo_used: str | None = None
+
+    for symbol in yahoo_symbol_candidates(ticker):
+        stock = yf.Ticker(symbol)
+        try:
+            candidate_info = stock.info or {}
+        except Exception as e:
+            logger.warning("%s@%s: could not fetch info: %s", ticker, symbol, e)
+            candidate_info = {}
+        candidate_sheets = _collect_yahoo_sheets(stock)
+        if candidate_sheets:
+            sheets = candidate_sheets
+            info = candidate_info
+            yahoo_used = symbol
+            break
+
+    if sheets and yahoo_used:
+        _fill_fmp_quarterly_gaps(ticker, yahoo_used, sheets)
 
     if not sheets:
         etf_path = _export_etf_workbook(ticker, info, out_dir)
@@ -121,6 +168,9 @@ def download_statements(ticker: str, out_dir: Path) -> Path | None:
             {
                 "field": [
                     "ticker",
+                    "yahoo_symbol",
+                    "country",
+                    "currency",
                     "company",
                     "sector",
                     "industry",
@@ -133,9 +183,13 @@ def download_statements(ticker: str, out_dir: Path) -> Path | None:
                     "debt_to_equity",
                     "free_cashflow",
                     "website",
+                    "includes_quarterly",
                 ],
                 "value": [
                     ticker,
+                    yahoo_used,
+                    info.get("country"),
+                    info.get("currency"),
                     company,
                     info.get("sector"),
                     info.get("industry"),
@@ -148,6 +202,7 @@ def download_statements(ticker: str, out_dir: Path) -> Path | None:
                     info.get("debtToEquity"),
                     info.get("freeCashflow"),
                     info.get("website"),
+                    DOWNLOAD_QUARTERLY,
                 ],
             }
         )

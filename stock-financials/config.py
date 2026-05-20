@@ -18,6 +18,12 @@ LOCAL_OUTPUT_DIR = Path(os.getenv("LOCAL_OUTPUT_DIR", "./output"))
 DOWNLOAD_10K = os.getenv("DOWNLOAD_10K", "true").lower() in ("1", "true", "yes")
 SEC_FILINGS_LIMIT = int(os.getenv("SEC_FILINGS_LIMIT", "3"))
 SEC_EMAIL = os.getenv("SEC_EMAIL", "your.email@example.com")
+DOWNLOAD_QUARTERLY = os.getenv("DOWNLOAD_QUARTERLY", "true").lower() in (
+    "1",
+    "true",
+    "yes",
+)
+FMP_API_KEY = os.getenv("FMP_API_KEY", "").strip()
 
 SCOPES = [
     "https://www.googleapis.com/auth/spreadsheets.readonly",
