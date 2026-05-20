@@ -16,6 +16,32 @@ STATEMENTS = (
     ("cash_flow", "cashflow"),
 )
 
+# Sheet ticker -> Yahoo symbol (ETFs / UCITS often need exchange suffix)
+YAHOO_ALIASES: dict[str, str] = {
+    "SWDA": "SWDA.L",
+    "IUSA": "IUSA.L",
+}
+
+ETF_INFO_FIELDS = (
+    "longName",
+    "shortName",
+    "category",
+    "fundFamily",
+    "totalAssets",
+    "expenseRatio",
+    "yield",
+    "ytdReturn",
+    "threeYearAverageReturn",
+    "fiveYearAverageReturn",
+    "beta3Year",
+    "fundInceptionDate",
+    "legalType",
+    "quoteType",
+    "currency",
+    "exchange",
+    "description",
+)
+
 
 def _safe_df(data) -> pd.DataFrame | None:
     if data is None:
@@ -25,10 +51,45 @@ def _safe_df(data) -> pd.DataFrame | None:
     return None
 
 
+def _yahoo_symbol(ticker: str) -> str:
+    return YAHOO_ALIASES.get(ticker.upper(), ticker)
+
+
+FUND_QUOTE_TYPES = frozenset({"ETF", "MUTUALFUND"})
+NON_FUND_QUOTE_TYPES = frozenset(
+    {"EQUITY", "INDEX", "CURRENCY", "CRYPTOCURRENCY", "FUTURE", "OPTION", "WARRANT"}
+)
+
+
+def _export_etf_workbook(ticker: str, info: dict, out_dir: Path) -> Path | None:
+    if not info:
+        return None
+    quote_type = info.get("quoteType")
+    if quote_type in NON_FUND_QUOTE_TYPES:
+        return None
+    if quote_type in FUND_QUOTE_TYPES:
+        pass
+    elif quote_type is not None:
+        return None
+    elif not info.get("longName") and not info.get("shortName"):
+        return None
+    rows = [(k, info.get(k)) for k in ETF_INFO_FIELDS if info.get(k) is not None]
+    if not rows:
+        return None
+    out_dir.mkdir(parents=True, exist_ok=True)
+    name = (info.get("longName") or info.get("shortName") or ticker).strip()
+    safe_name = "".join(c if c.isalnum() or c in " -_" else "_" for c in name)[:60]
+    path = out_dir / f"{ticker}_{safe_name}_etf_overview.xlsx"
+    pd.DataFrame(rows, columns=["field", "value"]).to_excel(path, index=False)
+    logger.info("%s: wrote ETF overview %s", ticker, path)
+    return path
+
+
 def download_statements(ticker: str, out_dir: Path) -> Path | None:
     """Export annual financial statements to one Excel workbook."""
     out_dir.mkdir(parents=True, exist_ok=True)
-    stock = yf.Ticker(ticker)
+    yahoo = _yahoo_symbol(ticker)
+    stock = yf.Ticker(yahoo)
     info = {}
     try:
         info = stock.info or {}
@@ -45,6 +106,9 @@ def download_statements(ticker: str, out_dir: Path) -> Path | None:
             logger.warning("%s: %s failed: %s", ticker, label, e)
 
     if not sheets:
+        etf_path = _export_etf_workbook(ticker, info, out_dir)
+        if etf_path:
+            return etf_path
         logger.error("%s: no financial statement data from Yahoo Finance", ticker)
         return None
 

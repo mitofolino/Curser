@@ -43,7 +43,7 @@ def process_ticker(
         if upload and not skip_drive:
             upload_file(xlsx, DRIVE_FOLDER_ID, subfolder=ticker)
 
-    if DOWNLOAD_10K:
+    if DOWNLOAD_10K and xlsx and "etf_overview" not in xlsx.name:
         sec_dir = ticker_dir / "SEC_10-K"
         if sec_dir.exists():
             shutil.rmtree(sec_dir)
