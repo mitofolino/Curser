@@ -27,6 +27,7 @@ FMP_API_KEY = os.getenv("FMP_API_KEY", "").strip()
 
 SCOPES = [
     "https://www.googleapis.com/auth/spreadsheets.readonly",
+    "https://www.googleapis.com/auth/spreadsheets",
     "https://www.googleapis.com/auth/drive.file",
 ]
 

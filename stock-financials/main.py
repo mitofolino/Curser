@@ -16,7 +16,15 @@ from config import (
     SEC_FILINGS_LIMIT,
 )
 from drive_upload import upload_file
-from financials import download_10k_filings, download_statements
+from financials import download_sec_annual_filings, download_statements
+from layout import (
+    drive_statements_folder,
+    sec_root_dir,
+    sec_upload_subfolder,
+    statements_dir,
+    ticker_dir,
+)
+from portfolio_summary import TickerResult, save_and_upload_summary
 from sheets_reader import read_tickers
 
 logging.basicConfig(
@@ -32,31 +40,38 @@ def process_ticker(
     local_root: Path,
     upload: bool,
     skip_drive: bool,
-) -> bool:
-    ticker_dir = local_root / ticker
-    ticker_dir.mkdir(parents=True, exist_ok=True)
-    ok = False
+) -> TickerResult:
+    result = TickerResult(ticker=ticker)
+    root = ticker_dir(local_root, ticker)
+    root.mkdir(parents=True, exist_ok=True)
+    stmt_dir = statements_dir(local_root, ticker)
 
-    xlsx = download_statements(ticker, ticker_dir)
-    if xlsx:
-        ok = True
+    path, overview, instrument = download_statements(ticker, stmt_dir)
+    if path:
+        result.ok = True
+        result.overview = overview
+        result.instrument_type = instrument
+        result.has_quarterly = bool(overview.get("has_quarterly"))
+        result.statement_file = path.name
         if upload and not skip_drive:
-            upload_file(xlsx, DRIVE_FOLDER_ID, subfolder=ticker)
+            upload_file(path, DRIVE_FOLDER_ID, subfolder=drive_statements_folder(ticker))
 
-    if DOWNLOAD_10K and xlsx and "etf_overview" not in xlsx.name:
-        sec_dir = ticker_dir / "SEC_10-K"
-        if sec_dir.exists():
-            shutil.rmtree(sec_dir)
-        sec_dir.mkdir(parents=True, exist_ok=True)
-        paths = download_10k_filings(ticker, sec_dir, SEC_FILINGS_LIMIT)
-        if paths:
-            ok = True
+    if DOWNLOAD_10K and path and instrument == "stock":
+        sec_base = sec_root_dir(local_root, ticker)
+        if sec_base.exists():
+            shutil.rmtree(sec_base)
+        sec_base.mkdir(parents=True, exist_ok=True)
+        paths, form = download_sec_annual_filings(ticker, sec_base, SEC_FILINGS_LIMIT)
+        if paths and form:
+            result.ok = True
+            result.sec_form = form
             if upload and not skip_drive:
                 for p in paths:
                     if p.is_file():
-                        upload_file(p, DRIVE_FOLDER_ID, subfolder=f"{ticker}/SEC_10-K")
+                        sub = sec_upload_subfolder(ticker, form, p, sec_base)
+                        upload_file(p, DRIVE_FOLDER_ID, subfolder=sub)
 
-    return ok
+    return result
 
 
 def main() -> int:
@@ -74,7 +89,7 @@ def main() -> int:
     parser.add_argument(
         "--no-10k",
         action="store_true",
-        help="Skip SEC 10-K downloads",
+        help="Skip SEC annual filings (10-K / 20-F)",
     )
     args = parser.parse_args()
 
@@ -95,22 +110,25 @@ def main() -> int:
     logger.info("Processing %d ticker(s): %s", len(tickers), ", ".join(tickers))
     LOCAL_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
-    success, failed = [], []
+    results: list[TickerResult] = []
     for ticker in tickers:
         try:
-            if process_ticker(
-                ticker,
-                local_root=LOCAL_OUTPUT_DIR,
-                upload=not args.local_only,
-                skip_drive=args.local_only,
-            ):
-                success.append(ticker)
-            else:
-                failed.append(ticker)
+            results.append(
+                process_ticker(
+                    ticker,
+                    local_root=LOCAL_OUTPUT_DIR,
+                    upload=not args.local_only,
+                    skip_drive=args.local_only,
+                )
+            )
         except Exception as e:
             logger.exception("%s: %s", ticker, e)
-            failed.append(ticker)
+            results.append(TickerResult(ticker=ticker))
 
+    save_and_upload_summary(results, upload=not args.local_only)
+
+    success = [r.ticker for r in results if r.ok]
+    failed = [r.ticker for r in results if not r.ok]
     logger.info("Done. OK: %s | Failed: %s", success, failed)
     logger.info("Local files: %s", LOCAL_OUTPUT_DIR.resolve())
     return 0 if not failed else 2

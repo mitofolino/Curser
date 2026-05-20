@@ -7,6 +7,7 @@ import pandas as pd
 import yfinance as yf
 
 from config import DOWNLOAD_QUARTERLY, FMP_API_KEY, SEC_EMAIL
+from layout import ETF_XLSX, FINANCIALS_XLSX
 from international import (
     fetch_fmp_statement,
     is_non_us_ticker,
@@ -80,7 +81,7 @@ def _export_etf_workbook(ticker: str, info: dict, out_dir: Path) -> Path | None:
     out_dir.mkdir(parents=True, exist_ok=True)
     name = (info.get("longName") or info.get("shortName") or ticker).strip()
     safe_name = "".join(c if c.isalnum() or c in " -_" else "_" for c in name)[:60]
-    path = out_dir / f"{ticker}_{safe_name}_etf_overview.xlsx"
+    path = out_dir / ETF_XLSX
     pd.DataFrame(rows, columns=["field", "value"]).to_excel(path, index=False)
     logger.info("%s: wrote ETF overview %s", ticker, path)
     return path
@@ -128,8 +129,34 @@ def _fill_fmp_quarterly_gaps(
             logger.info("%s: filled %s from FMP (%s)", ticker, sheet_name, symbol)
 
 
-def download_statements(ticker: str, out_dir: Path) -> Path | None:
-    """Export annual and quarterly financial statements to one Excel workbook."""
+def _overview_dict(ticker: str, info: dict, yahoo_used: str | None, sheets: dict) -> dict:
+    company = (info.get("longName") or info.get("shortName") or ticker).strip()
+    has_q = any("quarterly" in name for name in sheets)
+    return {
+        "company": company,
+        "yahoo_symbol": yahoo_used,
+        "country": info.get("country"),
+        "currency": info.get("currency"),
+        "sector": info.get("sector"),
+        "industry": info.get("industry"),
+        "market_cap": info.get("marketCap"),
+        "trailing_pe": info.get("trailingPE"),
+        "forward_pe": info.get("forwardPE"),
+        "dividend_yield": info.get("dividendYield"),
+        "profit_margins": info.get("profitMargins"),
+        "return_on_equity": info.get("returnOnEquity"),
+        "debt_to_equity": info.get("debtToEquity"),
+        "free_cashflow": info.get("freeCashflow"),
+        "website": info.get("website"),
+        "has_annual_statements": bool(
+            {"income_statement", "balance_sheet", "cash_flow"} & sheets.keys()
+        ),
+        "has_quarterly": has_q,
+    }
+
+
+def download_statements(ticker: str, out_dir: Path) -> tuple[Path | None, dict, str]:
+    """Export statements to out_dir. Returns (path, overview, instrument_type)."""
     out_dir.mkdir(parents=True, exist_ok=True)
     sheets: dict[str, pd.DataFrame] = {}
     info: dict = {}
@@ -155,81 +182,61 @@ def download_statements(ticker: str, out_dir: Path) -> Path | None:
     if not sheets:
         etf_path = _export_etf_workbook(ticker, info, out_dir)
         if etf_path:
-            return etf_path
+            meta = _overview_dict(ticker, info, yahoo_used, {})
+            meta["quote_type"] = info.get("quoteType")
+            return etf_path, meta, "etf"
         logger.error("%s: no financial statement data from Yahoo Finance", ticker)
-        return None
+        return None, {}, "unknown"
 
-    company = (info.get("longName") or info.get("shortName") or ticker).strip()
-    safe_name = "".join(c if c.isalnum() or c in " -_" else "_" for c in company)[:60]
-    path = out_dir / f"{ticker}_{safe_name}_financials.xlsx"
+    path = out_dir / FINANCIALS_XLSX
+    overview = _overview_dict(ticker, info, yahoo_used, sheets)
 
     with pd.ExcelWriter(path, engine="openpyxl") as writer:
-        meta = pd.DataFrame(
-            {
-                "field": [
-                    "ticker",
-                    "yahoo_symbol",
-                    "country",
-                    "currency",
-                    "company",
-                    "sector",
-                    "industry",
-                    "market_cap",
-                    "trailing_pe",
-                    "forward_pe",
-                    "dividend_yield",
-                    "profit_margins",
-                    "return_on_equity",
-                    "debt_to_equity",
-                    "free_cashflow",
-                    "website",
-                    "includes_quarterly",
-                ],
-                "value": [
-                    ticker,
-                    yahoo_used,
-                    info.get("country"),
-                    info.get("currency"),
-                    company,
-                    info.get("sector"),
-                    info.get("industry"),
-                    info.get("marketCap"),
-                    info.get("trailingPE"),
-                    info.get("forwardPE"),
-                    info.get("dividendYield"),
-                    info.get("profitMargins"),
-                    info.get("returnOnEquity"),
-                    info.get("debtToEquity"),
-                    info.get("freeCashflow"),
-                    info.get("website"),
-                    DOWNLOAD_QUARTERLY,
-                ],
-            }
-        )
-        meta.to_excel(writer, sheet_name="overview", index=False)
+        rows = [{"field": k, "value": v} for k, v in overview.items()]
+        rows.insert(0, {"field": "ticker", "value": ticker})
+        pd.DataFrame(rows).to_excel(writer, sheet_name="overview", index=False)
         for name, df in sheets.items():
             export = df.copy()
             export.index.name = "period"
             export.to_excel(writer, sheet_name=name[:31])
 
     logger.info("%s: wrote %s", ticker, path)
-    return path
+    return path, overview, "stock"
 
 
-def download_10k_filings(ticker: str, out_dir: Path, limit: int) -> list[Path]:
-    """Download recent 10-K annual reports from SEC EDGAR."""
+def download_sec_annual_filings(
+    ticker: str, out_dir: Path, limit: int
+) -> tuple[list[Path], str | None]:
+    """Download 10-K; for foreign issuers (e.g. AZN) fall back to 20-F."""
     try:
         from sec_edgar_downloader import Downloader
     except ImportError:
         logger.warning("sec-edgar-downloader not available")
-        return []
+        return [], None
 
     dl = Downloader("StockFinancials", SEC_EMAIL, str(out_dir))
     out_dir.mkdir(parents=True, exist_ok=True)
-    try:
-        dl.get("10-K", ticker, limit=limit, download_details=True)
-    except Exception as e:
-        logger.warning("%s: 10-K download failed: %s", ticker, e)
-        return []
 
-    return list(out_dir.rglob("*"))
+    for form in ("10-K", "20-F"):
+        try:
+            dl.get(form, ticker, limit=limit, download_details=True)
+        except Exception as e:
+            logger.warning("%s: %s download failed: %s", ticker, form, e)
+            continue
+        paths = [p for p in out_dir.rglob("*") if p.is_file()]
+        if paths:
+            if form == "20-F":
+                logger.info(
+                    "%s: no 10-K found; using 20-F (annual report for foreign issuers)",
+                    ticker,
+                )
+            else:
+                logger.info("%s: downloaded %s (%d files)", ticker, form, len(paths))
+            return paths, form
+
+    return [], None
+
+
+def download_10k_filings(ticker: str, out_dir: Path, limit: int) -> list[Path]:
+    paths, _ = download_sec_annual_filings(ticker, out_dir, limit)
+    return paths
