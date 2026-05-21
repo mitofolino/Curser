@@ -28,3 +28,41 @@ DOWNLOAD_QUARTERLY = os.getenv("DOWNLOAD_QUARTERLY", "true").lower() in (
     "yes",
 )
 FMP_API_KEY = os.getenv("FMP_API_KEY", "").strip()
+
+PORTFOLIO_NUMBERS_PATH = Path(
+    os.getenv(
+        "PORTFOLIO_NUMBERS_PATH",
+        str(OUTPUT_DIR / "portfolio_summary.numbers"),
+    )
+)
+PORTFOLIO_SHEET_NAME = os.getenv("PORTFOLIO_SHEET_NAME", "portfolio")
+# Portfolio summary output: numbers | xlsx | both
+PORTFOLIO_OUTPUT = os.getenv("PORTFOLIO_OUTPUT", "numbers").strip().lower()
+
+# eToro Public API: x-api-key (public) + x-user-key (private / user key from eToro settings)
+ETORO_API_URL = os.getenv("ETORO_API_URL", "https://public-api.etoro.com/api/v1").strip()
+ETORO_API_PUBLIC_KEY = os.getenv("ETORO_API_PUBLIC_KEY", "").strip()
+ETORO_API_PRIVATE_KEY = os.getenv("ETORO_API_PRIVATE_KEY", "").strip()
+ETORO_USER_KEY = ETORO_API_PRIVATE_KEY or os.getenv("ETORO_API_USER_KEY", "").strip()
+ETORO_CSV_PATH = (
+    Path(os.getenv("ETORO_CSV_PATH", "")).expanduser()
+    if os.getenv("ETORO_CSV_PATH")
+    else None
+)
+_etoro_flag = os.getenv("ETORO_ENABLED", "").lower()
+if _etoro_flag in ("1", "true", "yes"):
+    ETORO_ENABLED = True
+elif _etoro_flag in ("0", "false", "no"):
+    ETORO_ENABLED = False
+else:
+    ETORO_ENABLED = bool(ETORO_API_PUBLIC_KEY and ETORO_USER_KEY)
+
+# Numbers portfolio table: 1-based row where data starts (2 = keep row 1 as headers)
+PORTFOLIO_DATA_START_ROW = int(os.getenv("PORTFOLIO_DATA_START_ROW", "2"))
+
+# IBKR Client Portal — gateway must be running; or use CSV export
+IBKR_ENABLED = os.getenv("IBKR_ENABLED", "false").lower() in ("1", "true", "yes")
+IBKR_CPAPI_URL = os.getenv("IBKR_CPAPI_URL", "https://localhost:5000/v1/api").strip()
+IBKR_ACCOUNT_ID = os.getenv("IBKR_ACCOUNT_ID", "").strip()
+IBKR_VERIFY_SSL = os.getenv("IBKR_VERIFY_SSL", "false").lower() in ("1", "true", "yes")
+IBKR_CSV_PATH = Path(os.getenv("IBKR_CSV_PATH", "")).expanduser() if os.getenv("IBKR_CSV_PATH") else None

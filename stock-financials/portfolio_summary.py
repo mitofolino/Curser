@@ -9,9 +9,11 @@ from typing import Any
 
 import pandas as pd
 
-from config import OUTPUT_DIR
+from config import OUTPUT_DIR, PORTFOLIO_NUMBERS_PATH, PORTFOLIO_OUTPUT
 from fx_rates import normalize_currency, prefetch_rates_to_eur, rate_to_eur, to_eur
 from layout import PORTFOLIO_SUMMARY_FILENAME, ticker_dir
+from config import PORTFOLIO_SHEET_NAME
+from portfolio_positions import build_portfolio_dataframe
 
 logger = logging.getLogger(__name__)
 
@@ -174,10 +176,59 @@ def build_summary_dataframe(results: list[TickerResult]) -> pd.DataFrame:
     return _apply_eur_columns(df)
 
 
-def save_summary(results: list[TickerResult]) -> Path:
-    df = build_summary_dataframe(results)
-    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+def _save_summary_xlsx(
+    summary_df: pd.DataFrame, portfolio_df: pd.DataFrame
+) -> Path:
     path = OUTPUT_DIR / PORTFOLIO_SUMMARY_FILENAME
-    df.to_excel(path, index=False, sheet_name="summary")
-    logger.info("Wrote portfolio summary: %s", path)
+    with pd.ExcelWriter(path, engine="openpyxl") as writer:
+        summary_df.to_excel(writer, index=False, sheet_name="summary")
+        portfolio_df.to_excel(writer, index=False, sheet_name=PORTFOLIO_SHEET_NAME)
+    logger.info(
+        "Wrote %s (summary: %d rows, %s: %d rows)",
+        path,
+        len(summary_df),
+        PORTFOLIO_SHEET_NAME,
+        len(portfolio_df),
+    )
     return path
+
+
+def _save_summary_numbers(
+    summary_df: pd.DataFrame, portfolio_df: pd.DataFrame
+) -> Path:
+    from numbers_export import save_to_numbers
+
+    path = save_to_numbers(
+        PORTFOLIO_NUMBERS_PATH,
+        summary_df=summary_df,
+        portfolio_df=portfolio_df,
+        summary_sheet="summary",
+        portfolio_sheet=PORTFOLIO_SHEET_NAME,
+    )
+    logger.info(
+        "Wrote %s (summary: %d rows, %s: %d rows)",
+        path,
+        len(summary_df),
+        PORTFOLIO_SHEET_NAME,
+        len(portfolio_df),
+    )
+    return path
+
+
+def save_summary(results: list[TickerResult]) -> Path:
+    summary_df = build_summary_dataframe(results)
+    portfolio_df = build_portfolio_dataframe()
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+
+    mode = PORTFOLIO_OUTPUT
+    last_path = PORTFOLIO_NUMBERS_PATH
+
+    if mode in ("xlsx", "both"):
+        last_path = _save_summary_xlsx(summary_df, portfolio_df)
+    if mode in ("numbers", "both"):
+        last_path = _save_summary_numbers(summary_df, portfolio_df)
+    if mode not in ("xlsx", "numbers", "both"):
+        logger.warning("Unknown PORTFOLIO_OUTPUT=%s; using numbers", mode)
+        last_path = _save_summary_numbers(summary_df, portfolio_df)
+
+    return last_path
