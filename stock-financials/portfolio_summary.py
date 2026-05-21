@@ -1,4 +1,4 @@
-"""Build and upload root portfolio summary for long-term analysis."""
+"""Build local portfolio summary spreadsheet for long-term analysis."""
 
 from __future__ import annotations
 
@@ -9,10 +9,9 @@ from typing import Any
 
 import pandas as pd
 
-from config import DRIVE_FOLDER_ID, LOCAL_OUTPUT_DIR
-from drive_upload import upload_portfolio_summary_sheet
+from config import OUTPUT_DIR
 from fx_rates import normalize_currency, prefetch_rates_to_eur, rate_to_eur, to_eur
-from layout import FINANCIALS_XLSX, SUMMARY_SHEET_NAME, statements_dir
+from layout import PORTFOLIO_SUMMARY_FILENAME, ticker_dir
 
 logger = logging.getLogger(__name__)
 
@@ -55,7 +54,7 @@ class TickerResult:
     overview: dict[str, Any] = field(default_factory=dict)
     has_quarterly: bool = False
     sec_form: str | None = None
-    statement_file: str | None = None
+    files_exported: int = 0
 
 
 def _pct(value: Any) -> Any:
@@ -68,38 +67,61 @@ def _pct(value: Any) -> Any:
         return value
 
 
-def _revenue_metrics(ticker: str, statements_path: Path) -> tuple[Any, Any]:
-    """Latest revenue and approximate 5y growth from annual income statement."""
+def _latest_income_statement_file(ticker: str) -> Path | None:
+    folder = ticker_dir(OUTPUT_DIR, ticker)
+    if not folder.exists():
+        return None
+    candidates = sorted(
+        folder.glob(f"{ticker}_*_income_statement*.xlsx"),
+        reverse=True,
+    )
+    annual = [p for p in candidates if "annual" in p.name.lower()]
+    return (annual or candidates)[0] if (annual or candidates) else None
+
+
+def _revenue_from_file(path: Path) -> float | None:
     try:
-        df = pd.read_excel(statements_path, sheet_name="income_statement", index_col=0)
+        df = pd.read_excel(path, index_col=0)
     except Exception:
-        return None, None
-    rev_row = None
+        return None
     for name in ("Total Revenue", "Revenue", "Operating Revenue"):
         if name in df.index:
-            rev_row = df.loc[name]
-            break
-    if rev_row is None or rev_row.empty:
+            row = df.loc[name]
+            if isinstance(row, pd.DataFrame):
+                row = row.iloc[:, 0]
+            val = pd.to_numeric(row, errors="coerce").dropna()
+            if not val.empty:
+                return float(val.iloc[0])
+    return None
+
+
+def _revenue_metrics(ticker: str) -> tuple[Any, Any]:
+    """Latest revenue and approximate 5y growth from annual income statement files."""
+    folder = ticker_dir(OUTPUT_DIR, ticker)
+    annual_files = sorted(
+        folder.glob(f"{ticker}_*_income_statement_annual.xlsx"),
+        reverse=True,
+    )
+    if not annual_files:
+        path = _latest_income_statement_file(ticker)
+        if path:
+            latest = _revenue_from_file(path)
+            return latest, None
         return None, None
-    series = pd.to_numeric(rev_row, errors="coerce").dropna()
-    if series.empty:
+    revenues = [_revenue_from_file(p) for p in annual_files]
+    revenues = [r for r in revenues if r is not None]
+    if not revenues:
         return None, None
-    latest = float(series.iloc[0])
-    if len(series) >= 5:
-        oldest = float(series.iloc[4])
-        if oldest > 0:
-            growth = (latest / oldest) ** (1 / 5) - 1
-            return latest, round(growth * 100, 2)
+    latest = revenues[0]
+    if len(revenues) >= 5 and revenues[-1] > 0:
+        growth = (latest / revenues[-1]) ** (1 / 5) - 1
+        return latest, round(growth * 100, 2)
     return latest, None
 
 
 def result_to_row(result: TickerResult) -> dict[str, Any]:
     ov = result.overview
-    rev_latest, rev_growth = None, None
-    if result.statement_file == FINANCIALS_XLSX:
-        path = statements_dir(LOCAL_OUTPUT_DIR, result.ticker) / FINANCIALS_XLSX
-        if path.exists():
-            rev_latest, rev_growth = _revenue_metrics(result.ticker, path)
+    rev_latest, rev_growth = _revenue_metrics(result.ticker)
 
     return {
         "ticker": result.ticker,
@@ -152,20 +174,10 @@ def build_summary_dataframe(results: list[TickerResult]) -> pd.DataFrame:
     return _apply_eur_columns(df)
 
 
-def save_and_upload_summary(
-    results: list[TickerResult],
-    *,
-    upload: bool,
-) -> Path:
+def save_summary(results: list[TickerResult]) -> Path:
     df = build_summary_dataframe(results)
-    LOCAL_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    local_xlsx = LOCAL_OUTPUT_DIR / "portfolio_summary.xlsx"
-    df.to_excel(local_xlsx, index=False, sheet_name="summary")
-    logger.info("Wrote local summary: %s", local_xlsx)
-
-    if upload:
-        url = upload_portfolio_summary_sheet(
-            df, DRIVE_FOLDER_ID, title=SUMMARY_SHEET_NAME
-        )
-        logger.info("Portfolio summary Google Sheet: %s", url)
-    return local_xlsx
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    path = OUTPUT_DIR / PORTFOLIO_SUMMARY_FILENAME
+    df.to_excel(path, index=False, sheet_name="summary")
+    logger.info("Wrote portfolio summary: %s", path)
+    return path

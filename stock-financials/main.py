@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Read tickers from Google Sheets and download financial statements to Drive."""
+"""Download financial statements and SEC filings to a local folder."""
 
 from __future__ import annotations
 
@@ -10,22 +10,17 @@ import sys
 from pathlib import Path
 
 from config import (
+    DATA_START_ROW,
     DOWNLOAD_10K,
-    DRIVE_FOLDER_ID,
-    LOCAL_OUTPUT_DIR,
+    OUTPUT_DIR,
     SEC_FILINGS_LIMIT,
+    STOCKS_XLSX,
+    TICKER_COLUMN,
 )
-from drive_upload import upload_file
 from financials import download_sec_annual_filings, download_statements
-from layout import (
-    drive_statements_folder,
-    sec_root_dir,
-    sec_upload_subfolder,
-    statements_dir,
-    ticker_dir,
-)
-from portfolio_summary import TickerResult, save_and_upload_summary
-from sheets_reader import read_tickers
+from layout import sec_filename, ticker_dir
+from portfolio_summary import TickerResult, save_summary
+from tickers_reader import read_tickers
 
 logging.basicConfig(
     level=logging.INFO,
@@ -34,42 +29,61 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-def process_ticker(
-    ticker: str,
-    *,
-    local_root: Path,
-    upload: bool,
-    skip_drive: bool,
-) -> TickerResult:
-    result = TickerResult(ticker=ticker)
-    root = ticker_dir(local_root, ticker)
-    root.mkdir(parents=True, exist_ok=True)
-    stmt_dir = statements_dir(local_root, ticker)
+def _accession_from_path(path: Path, form: str) -> str:
+    parts = path.parts
+    if form in parts:
+        idx = parts.index(form)
+        if idx + 1 < len(parts):
+            return parts[idx + 1]
+    return path.parent.name
 
-    path, overview, instrument = download_statements(ticker, stmt_dir)
-    if path:
+
+def _prepare_sec_files(
+    ticker: str, form: str, raw_paths: list[Path], dest_dir: Path
+) -> list[Path]:
+    """Copy SEC downloads into ticker folder with {ticker}_{date}_{form}_{doc}.ext names."""
+    prepared: list[Path] = []
+    for src in raw_paths:
+        if not src.is_file():
+            continue
+        accession = _accession_from_path(src, form)
+        name = sec_filename(ticker, accession, form, src.name)
+        dest = dest_dir / name
+        if dest.exists():
+            dest.unlink()
+        shutil.copy2(src, dest)
+        prepared.append(dest)
+        logger.info("%s: prepared %s", ticker, name)
+    return prepared
+
+
+def process_ticker(ticker: str, *, output_root: Path) -> TickerResult:
+    result = TickerResult(ticker=ticker)
+    dest = ticker_dir(output_root, ticker)
+    dest.mkdir(parents=True, exist_ok=True)
+
+    paths, overview, instrument = download_statements(ticker, dest)
+    if paths:
         result.ok = True
         result.overview = overview
         result.instrument_type = instrument
         result.has_quarterly = bool(overview.get("has_quarterly"))
-        result.statement_file = path.name
-        if upload and not skip_drive:
-            upload_file(path, DRIVE_FOLDER_ID, subfolder=drive_statements_folder(ticker))
+        result.files_exported = len(paths)
 
-    if DOWNLOAD_10K and path and instrument == "stock":
-        sec_base = sec_root_dir(local_root, ticker)
-        if sec_base.exists():
-            shutil.rmtree(sec_base)
-        sec_base.mkdir(parents=True, exist_ok=True)
-        paths, form = download_sec_annual_filings(ticker, sec_base, SEC_FILINGS_LIMIT)
-        if paths and form:
+    if DOWNLOAD_10K and paths and instrument == "stock":
+        sec_tmp = dest / ".sec_tmp"
+        if sec_tmp.exists():
+            shutil.rmtree(sec_tmp)
+        sec_tmp.mkdir(parents=True, exist_ok=True)
+        raw_paths, form = download_sec_annual_filings(ticker, sec_tmp, SEC_FILINGS_LIMIT)
+        if raw_paths and form:
+            sec_files = _prepare_sec_files(ticker, form, raw_paths, dest)
+            shutil.rmtree(sec_tmp, ignore_errors=True)
             result.ok = True
             result.sec_form = form
-            if upload and not skip_drive:
-                for p in paths:
-                    if p.is_file():
-                        sub = sec_upload_subfolder(ticker, form, p, sec_base)
-                        upload_file(p, DRIVE_FOLDER_ID, subfolder=sub)
+            result.files_exported += len(sec_files)
+        else:
+            shutil.rmtree(sec_tmp, ignore_errors=True)
 
     return result
 
@@ -79,17 +93,17 @@ def main() -> int:
     parser.add_argument(
         "--tickers",
         nargs="*",
-        help="Override sheet: process only these symbols (e.g. AAPL MSFT)",
-    )
-    parser.add_argument(
-        "--local-only",
-        action="store_true",
-        help="Skip Google Drive upload (save under LOCAL_OUTPUT_DIR only)",
+        help="Process only these symbols (default: read from Stocks.xlsx)",
     )
     parser.add_argument(
         "--no-10k",
         action="store_true",
         help="Skip SEC annual filings (10-K / 20-F)",
+    )
+    parser.add_argument(
+        "--cleanup",
+        action="store_true",
+        help="Remove legacy statements/ and sec/ subfolders before run",
     )
     args = parser.parse_args()
 
@@ -100,37 +114,40 @@ def main() -> int:
     if args.tickers:
         tickers = [t.upper().strip() for t in args.tickers]
     else:
-        logger.info("Reading tickers from Google Sheet...")
+        logger.info("Reading tickers from %s", STOCKS_XLSX)
         tickers = read_tickers()
 
     if not tickers:
-        logger.error("No tickers found. Check SHEET_GID, TICKER_COLUMN, DATA_START_ROW in .env")
+        logger.error(
+            "No tickers found. Check %s (TICKER_COLUMN=%s, DATA_START_ROW=%s)",
+            STOCKS_XLSX,
+            TICKER_COLUMN,
+            DATA_START_ROW,
+        )
         return 1
 
     logger.info("Processing %d ticker(s): %s", len(tickers), ", ".join(tickers))
-    LOCAL_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+
+    if args.cleanup:
+        from cleanup import cleanup_local_output
+
+        cleanup_local_output()
 
     results: list[TickerResult] = []
     for ticker in tickers:
         try:
-            results.append(
-                process_ticker(
-                    ticker,
-                    local_root=LOCAL_OUTPUT_DIR,
-                    upload=not args.local_only,
-                    skip_drive=args.local_only,
-                )
-            )
+            results.append(process_ticker(ticker, output_root=OUTPUT_DIR))
         except Exception as e:
             logger.exception("%s: %s", ticker, e)
             results.append(TickerResult(ticker=ticker))
 
-    save_and_upload_summary(results, upload=not args.local_only)
+    save_summary(results)
 
     success = [r.ticker for r in results if r.ok]
     failed = [r.ticker for r in results if not r.ok]
     logger.info("Done. OK: %s | Failed: %s", success, failed)
-    logger.info("Local files: %s", LOCAL_OUTPUT_DIR.resolve())
+    logger.info("Output: %s", OUTPUT_DIR.resolve())
     return 0 if not failed else 2
 
 
