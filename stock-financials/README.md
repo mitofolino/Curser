@@ -85,7 +85,7 @@ Configure brokers in `.env` (see `.env.example`). On each `python main.py` run, 
 
 **Cell formatting:** Values are written as real numbers and dates (not `1.2 B` abbreviations). Units in column headers drive formatting — e.g. `[local]` / `[EUR]` use thousands separators and 2 decimals, `[%]` uses percent style, `[UTC]` uses `yyyy-MM-dd HH:mm:ss`. See `numbers_format.py`.
 
-**GBP buy prices:** eToro reports LSE prices in **pence**; the pipeline divides **Buy Price [local]** by 100 when currency is GBP (see `normalize_local_buy_price` in `market_source.py`).
+**GBP [local] amounts:** eToro reports LSE **buy price** and **total fees** in **pence**; the pipeline divides both by 100 when currency is GBP (see `normalize_gbp_pence_to_pounds` in `market_source.py`).
 
 Set `PORTFOLIO_OUTPUT=numbers` (default), `xlsx`, or `both` in `.env`. Per-ticker statement files remain `.xlsx` (Yahoo/Excel-friendly); only the **portfolio summary** uses Numbers when `numbers` or `both` is set.
 

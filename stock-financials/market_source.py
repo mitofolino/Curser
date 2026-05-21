@@ -83,26 +83,31 @@ EXCHANGE_CURRENCY: dict[str, str] = {
     "BCS": "CLP",
 }
 
-# eToro / LSE report GBP instrument prices in pence (100 pence = £1)
+# eToro / LSE report GBP amounts in pence (100 pence = £1) for [local] columns
 GBP_PENCE_PER_POUND = 100
 
 
-def normalize_local_buy_price(price: Any, currency: str | None) -> Any:
+def normalize_gbp_pence_to_pounds(amount: Any, currency: str | None) -> Any:
     """
-    Convert broker buy/open rates from pence to pounds when currency is GBP.
+    Convert broker GBP amounts from pence to pounds.
 
-    eToro ``openRate`` for LSE (and similar) is in pence; portfolio [local]
-    columns and investment math use pounds.
+    eToro ``openRate`` and ``totalFees`` for LSE positions use pence; portfolio
+    [local] columns and investment math use pounds.
     """
-    if price is None or price == "":
-        return price
+    if amount is None or amount == "":
+        return amount
     cur = _normalize_currency_code(currency)
     if cur != "GBP":
-        return price
+        return amount
     try:
-        return float(price) / GBP_PENCE_PER_POUND
+        return float(amount) / GBP_PENCE_PER_POUND
     except (TypeError, ValueError):
-        return price
+        return amount
+
+
+def normalize_local_buy_price(price: Any, currency: str | None) -> Any:
+    """Alias for :func:`normalize_gbp_pence_to_pounds` (buy price)."""
+    return normalize_gbp_pence_to_pounds(price, currency)
 
 
 def normalize_market_source(value: str | None) -> str | None:
