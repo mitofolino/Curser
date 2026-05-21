@@ -22,6 +22,11 @@ from config import (
     ETORO_USER_KEY,
     OUTPUT_DIR,
 )
+from market_source import (
+    currency_for_market_source,
+    exchange_from_ticker,
+    normalize_market_source,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -62,17 +67,22 @@ def _row(
     *,
     ticker: str,
     full_name: str,
+    source: str | None,
     currency: str,
     shares: Any,
     open_date: Any,
     buy_price: Any,
     total_fees: Any,
 ) -> dict[str, Any]:
+    market = normalize_market_source(source) or exchange_from_ticker(ticker)
+    resolved_currency = currency_for_market_source(
+        market, ticker=ticker, fallback=currency
+    )
     return {
         "Ticker": str(ticker).strip().upper(),
         "Full Name": full_name or None,
-        "Source": "etoro",
-        "Currency": currency or None,
+        "Source": market,
+        "Currency": resolved_currency,
         "Shares": shares,
         "Open Date": _parse_open_datetime(open_date),
         "Buy Price": buy_price,
@@ -144,21 +154,20 @@ def _parse_instrument_item(item: dict) -> dict[str, Any] | None:
         or item.get("Symbol")
         or item.get("internalSymbol")
     )
-    currency = item.get("currency") or item.get("currencyCode")
-    if not currency:
-        source = str(item.get("priceSource") or "").upper()
-        if source in ("NASDAQ", "NYSE", "ARCA", "BATS", "AMEX"):
-            currency = "USD"
-        elif source in ("LSE",):
-            currency = "GBP"
-        elif source in ("XETRA", "FWB", "GETTEX"):
-            currency = "EUR"
+    price_source = normalize_market_source(
+        item.get("priceSource") or item.get("PriceSource")
+    )
+    api_currency = item.get("currency") or item.get("currencyCode")
+    currency = currency_for_market_source(
+        price_source, ticker=symbol, fallback=api_currency
+    )
     return {
         "symbol": symbol,
         "name": item.get("instrumentDisplayName")
         or item.get("displayName")
         or item.get("name"),
         "currency": currency,
+        "price_source": price_source,
     }
 
 
@@ -194,7 +203,11 @@ def _instrument_map(instrument_ids: set[int]) -> dict[int, dict[str, Any]]:
         return {}
 
     mapping = _load_instrument_cache()
-    to_fetch = sorted(instrument_ids - set(mapping))
+    to_fetch = sorted(
+        iid
+        for iid in instrument_ids
+        if iid not in mapping or not mapping[iid].get("price_source")
+    )
 
     for iid in to_fetch:
         try:
@@ -272,6 +285,7 @@ def _from_api() -> list[dict[str, Any]]:
             _row(
                 ticker=str(ticker),
                 full_name=meta.get("name"),
+                source=meta.get("price_source"),
                 currency=meta.get("currency"),
                 shares=pos.get("lotCount")
                 or pos.get("units")
@@ -303,6 +317,10 @@ def _from_csv(path: Path) -> list[dict[str, Any]]:
                     full_name=raw.get("Full Name")
                     or raw.get("Name")
                     or raw.get("Instrument Name"),
+                    source=raw.get("Source")
+                    or raw.get("Exchange")
+                    or raw.get("Market")
+                    or raw.get("priceSource"),
                     currency=raw.get("Currency") or raw.get("Currency Code"),
                     shares=raw.get("Shares")
                     or raw.get("Units")

@@ -57,6 +57,7 @@ def _header_column_map(table, expected_columns: list[str]) -> dict[str, int]:
     for internal, display in PORTFOLIO_DISPLAY_NAMES.items():
         aliases[internal.lower()] = display
         aliases[display.lower()] = display
+    aliases["broker"] = PORTFOLIO_DISPLAY_NAMES["Source"]
 
     mapping: dict[str, int] = {}
     for c in range(table.num_cols):

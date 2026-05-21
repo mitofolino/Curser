@@ -15,6 +15,11 @@ from config import (
     IBKR_ENABLED,
     IBKR_VERIFY_SSL,
 )
+from market_source import (
+    currency_for_market_source,
+    exchange_from_ticker,
+    normalize_market_source,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -30,21 +35,41 @@ def _parse_date(value: Any) -> Any:
     return text
 
 
+def _ibkr_market_source(pos: dict) -> str | None:
+    for key in (
+        "listingExchange",
+        "exchange",
+        "primaryExchange",
+        "primaryExch",
+        "market",
+        "mic",
+    ):
+        val = pos.get(key)
+        if val:
+            return normalize_market_source(str(val))
+    return None
+
+
 def _row(
     *,
     ticker: str,
     full_name: str,
+    source: str | None,
     currency: str,
     shares: Any,
     open_date: Any,
     buy_price: Any,
     total_fees: Any,
 ) -> dict[str, Any]:
+    market = normalize_market_source(source) or exchange_from_ticker(ticker)
+    resolved_currency = currency_for_market_source(
+        market, ticker=ticker, fallback=currency
+    )
     return {
         "Ticker": str(ticker).strip().upper(),
         "Full Name": full_name or None,
-        "Source": "ibkr",
-        "Currency": currency or None,
+        "Source": market,
+        "Currency": resolved_currency,
         "Shares": shares,
         "Open Date": _parse_date(open_date),
         "Buy Price": buy_price,
@@ -95,6 +120,9 @@ def _from_csv(path) -> list[dict[str, Any]]:
                 _row(
                     ticker=ticker,
                     full_name=raw.get("Full Name") or raw.get("Description"),
+                    source=raw.get("Source")
+                    or raw.get("Exchange")
+                    or raw.get("Listing Exchange"),
                     currency=raw.get("Currency"),
                     shares=raw.get("Shares") or raw.get("Quantity"),
                     open_date=raw.get("Open Date") or raw.get("OpenDate"),
@@ -135,6 +163,7 @@ def _positions_from_ibkr(account_id: str) -> list[dict[str, Any]]:
                 _row(
                     ticker=ticker,
                     full_name=pos.get("description") or pos.get("contractDesc"),
+                    source=_ibkr_market_source(pos),
                     currency=pos.get("currency") or pos.get("cur"),
                     shares=pos.get("position") or pos.get("quantity"),
                     open_date=pos.get("openDate") or pos.get("open_date"),

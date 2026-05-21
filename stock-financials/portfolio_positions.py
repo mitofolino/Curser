@@ -34,7 +34,7 @@ PORTFOLIO_COLUMNS = [
 PORTFOLIO_DISPLAY_NAMES: dict[str, str] = {
     "Ticker": "Ticker",
     "Full Name": "Instrument Name",
-    "Source": "Broker",
+    "Source": "Source",
     "Currency": "Currency",
     "Shares": "Shares [units]",
     "Open Date": "Open Date [UTC]",
@@ -74,13 +74,11 @@ def _fmt_ticker(value: Any) -> str:
     return _fmt_text(value).upper()
 
 
-def _fmt_broker(value: Any) -> str:
-    text = _fmt_text(value).lower()
-    if text == "etoro":
-        return "eToro"
-    if text == "ibkr":
-        return "IBKR"
-    return _fmt_text(value).title()
+def _fmt_source(value: Any) -> str:
+    from market_source import normalize_market_source
+
+    normalized = normalize_market_source(_fmt_text(value) or None)
+    return normalized or ""
 
 
 def _fmt_currency(value: Any) -> str:
@@ -151,16 +149,20 @@ def enrich_portfolio_fields(df: pd.DataFrame) -> pd.DataFrame:
         return df
 
     out = _align_template_columns(df).copy()
-    pairs = {
-        (row.get("Currency"), str(row.get("Open Date") or "")[:10])
-        for _, row in out.iterrows()
-        if row.get("Currency")
-    }
-    prefetch_rates_to_eur_on_dates(pairs)
+    from market_source import currency_for_market_source, normalize_market_source
 
     now = datetime.now(timezone.utc).replace(microsecond=0).strftime("%Y-%m-%d %H:%M:%S")
     for idx in out.index:
-        currency = out.at[idx, "Currency"]
+        ticker = out.at[idx, "Ticker"]
+        source = normalize_market_source(out.at[idx, "Source"])
+        if source:
+            out.at[idx, "Source"] = source
+        currency = currency_for_market_source(
+            source,
+            ticker=ticker,
+            fallback=out.at[idx, "Currency"],
+        )
+        out.at[idx, "Currency"] = currency
         open_date = out.at[idx, "Open Date"]
         fx = eur_to_local_rate_on_date(currency, open_date)
         out.at[idx, "Open Exchange Rate"] = fx
@@ -180,13 +182,20 @@ def enrich_portfolio_fields(df: pd.DataFrame) -> pd.DataFrame:
             out.at[idx, "Investment"] = None
             out.at[idx, "Investment EUR"] = None
 
+    pairs = {
+        (out.at[idx, "Currency"], str(out.at[idx, "Open Date"] or "")[:10])
+        for idx in out.index
+        if out.at[idx, "Currency"]
+    }
+    prefetch_rates_to_eur_on_dates(pairs)
+
     return out
 
 
 _PORTFOLIO_FORMATTERS: dict[str, Any] = {
     "Ticker": _fmt_ticker,
     "Full Name": _fmt_text,
-    "Source": _fmt_broker,
+    "Source": _fmt_source,
     "Currency": _fmt_currency,
     "Shares": _fmt_shares,
     "Open Date": _fmt_open_date,
