@@ -4,4 +4,5 @@ openpyxl>=3.1.2
 sec-edgar-downloader>=5.0.2
 python-dotenv>=1.0.0
 requests>=2.31.0
+ib_insync>=0.9.86
 numbers-parser>=4.0.0

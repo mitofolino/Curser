@@ -94,9 +94,9 @@ Set `PORTFOLIO_OUTPUT=numbers` (default), `xlsx`, or `both` in `.env`. Per-ticke
 | Broker | Option A (API) | Option B (CSV until API works) |
 |--------|----------------|--------------------------------|
 | **eToro** | `ETORO_ENABLED=true`, `ETORO_API_KEY`, correct `ETORO_API_URL` from eToro’s API docs for your account | Export positions CSV → `ETORO_CSV_PATH` |
-| **IBKR** | `IBKR_ENABLED=true`, Client Portal / IB Gateway running, log in at `https://localhost:5000`, optional `IBKR_ACCOUNT_ID` | Flex/Activity export CSV → `IBKR_CSV_PATH` |
+| **IBKR** | `IBKR_ENABLED=true`, **TWS** or **IB Gateway** running with API enabled (`IBKR_HOST` / `IBKR_PORT`, default `127.0.0.1:7497` paper), optional `IBKR_ACCOUNT_ID` | Flex/Activity export CSV → `IBKR_CSV_PATH` |
 
-Also send (once): **exact API base URL and sample JSON** for eToro positions (or confirm you only want CSV), and whether IBKR uses **Client Portal** (port 5000) or **TWS API** (port 7496) — the code targets Client Portal by default.
+IBKR uses **[ib_insync](https://ib-insync.readthedocs.io/)** (`ib.positions()`). Open date and commissions are not on the position snapshot — fees export as `0` unless you use CSV with those columns.
 
 ## Privacy / Git
 

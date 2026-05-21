@@ -86,8 +86,12 @@ def _row(
         "Currency": resolved_currency,
         "Shares": shares,
         "Open Date": _parse_open_datetime(open_date),
-        "Buy Price": normalize_gbp_pence_to_pounds(buy_price, resolved_currency),
-        "Total Fees": normalize_gbp_pence_to_pounds(total_fees, resolved_currency),
+        "Buy Price": normalize_gbp_pence_to_pounds(
+            buy_price, resolved_currency, in_pence=True
+        ),
+        "Total Fees": normalize_gbp_pence_to_pounds(
+            total_fees, resolved_currency, in_pence=True
+        ),
     }
 
 

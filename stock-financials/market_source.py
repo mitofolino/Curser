@@ -87,17 +87,22 @@ EXCHANGE_CURRENCY: dict[str, str] = {
 GBP_PENCE_PER_POUND = 100
 
 
-def normalize_gbp_pence_to_pounds(amount: Any, currency: str | None) -> Any:
+def normalize_gbp_pence_to_pounds(
+    amount: Any,
+    currency: str | None,
+    *,
+    in_pence: bool = False,
+) -> Any:
     """
-    Convert broker GBP amounts from pence to pounds.
+    Convert broker GBP amounts from pence to pounds when ``in_pence`` is True.
 
-    eToro ``openRate`` and ``totalFees`` for LSE positions use pence; portfolio
-    [local] columns and investment math use pounds.
+    eToro LSE fields use pence; IBKR ``avgCost`` is already in pounds — do not
+    pass ``in_pence`` for IBKR rows.
     """
     if amount is None or amount == "":
         return amount
     cur = _normalize_currency_code(currency)
-    if cur != "GBP":
+    if cur != "GBP" or not in_pence:
         return amount
     try:
         return float(amount) / GBP_PENCE_PER_POUND

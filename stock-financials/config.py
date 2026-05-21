@@ -60,9 +60,12 @@ else:
 # Numbers portfolio table: 1-based row where data starts (2 = keep row 1 as headers)
 PORTFOLIO_DATA_START_ROW = int(os.getenv("PORTFOLIO_DATA_START_ROW", "2"))
 
-# IBKR Client Portal — gateway must be running; or use CSV export
+# IBKR via ib_insync — TWS or IB Gateway with API enabled; or CSV export
 IBKR_ENABLED = os.getenv("IBKR_ENABLED", "false").lower() in ("1", "true", "yes")
-IBKR_CPAPI_URL = os.getenv("IBKR_CPAPI_URL", "https://localhost:5000/v1/api").strip()
+IBKR_HOST = os.getenv("IBKR_HOST", "127.0.0.1").strip()
+IBKR_PORT = int(os.getenv("IBKR_PORT", "7497"))
+IBKR_CLIENT_ID = int(os.getenv("IBKR_CLIENT_ID", "1"))
+IBKR_CONNECT_TIMEOUT = int(os.getenv("IBKR_CONNECT_TIMEOUT", "15"))
+IBKR_READONLY = os.getenv("IBKR_READONLY", "true").lower() in ("1", "true", "yes")
 IBKR_ACCOUNT_ID = os.getenv("IBKR_ACCOUNT_ID", "").strip()
-IBKR_VERIFY_SSL = os.getenv("IBKR_VERIFY_SSL", "false").lower() in ("1", "true", "yes")
 IBKR_CSV_PATH = Path(os.getenv("IBKR_CSV_PATH", "")).expanduser() if os.getenv("IBKR_CSV_PATH") else None

@@ -1,4 +1,4 @@
-"""Interactive Brokers Client Portal API positions."""
+"""Interactive Brokers positions via ib_insync (TWS / IB Gateway API)."""
 
 from __future__ import annotations
 
@@ -6,14 +6,15 @@ import logging
 from datetime import datetime
 from typing import Any
 
-import requests
-
 from config import (
     IBKR_ACCOUNT_ID,
-    IBKR_CPAPI_URL,
+    IBKR_CLIENT_ID,
+    IBKR_CONNECT_TIMEOUT,
     IBKR_CSV_PATH,
     IBKR_ENABLED,
-    IBKR_VERIFY_SSL,
+    IBKR_HOST,
+    IBKR_PORT,
+    IBKR_READONLY,
 )
 from market_source import (
     currency_for_market_source,
@@ -23,6 +24,32 @@ from market_source import (
 )
 
 logger = logging.getLogger(__name__)
+
+# IB primaryExchange / exchange → Yahoo-style ticker suffix
+_IB_EXCHANGE_TICKER_SUFFIX: dict[str, str] = {
+    "LSE": "L",
+    "IBE": "L",
+    "IBIS": "DE",
+    "IBIS2": "DE",
+    "XETRA": "DE",
+    "FWB": "DE",
+    "GETTEX": "DE",
+    "SWX": "SW",
+    "EBS": "SW",
+    "SFB": "SW",
+    "TSEJ": "T",
+    "TSE": "T",
+    "SEHK": "HK",
+    "HKEX": "HK",
+    "ASX": "AX",
+    "TSX": "TO",
+    "EURONEXT": "PA",
+    "AEB": "AS",
+    "BVME": "MI",
+    "BME": "MC",
+    "SBF": "PA",
+    "MIL": "MI",
+}
 
 
 def _parse_date(value: Any) -> Any:
@@ -36,19 +63,36 @@ def _parse_date(value: Any) -> Any:
     return text
 
 
-def _ibkr_market_source(pos: dict) -> str | None:
-    for key in (
-        "listingExchange",
-        "exchange",
-        "primaryExchange",
-        "primaryExch",
-        "market",
-        "mic",
-    ):
-        val = pos.get(key)
-        if val:
+def _contract_market_source(contract: Any) -> str | None:
+    for attr in ("primaryExchange", "exchange"):
+        val = getattr(contract, attr, None)
+        if val and str(val).strip():
             return normalize_market_source(str(val))
     return None
+
+
+def _contract_to_ticker(contract: Any) -> str:
+    symbol = (getattr(contract, "symbol", None) or "").strip().upper()
+    if not symbol:
+        return ""
+
+    local = (getattr(contract, "localSymbol", None) or "").strip().upper()
+    if local and local != symbol and "." in local:
+        return local
+
+    pe = (getattr(contract, "primaryExchange", None) or "").strip().upper()
+    exch = (getattr(contract, "exchange", None) or "").strip().upper()
+    key = pe or exch
+
+    suffix = _IB_EXCHANGE_TICKER_SUFFIX.get(key)
+    if suffix and not symbol.endswith(f".{suffix}"):
+        return f"{symbol}.{suffix}"
+
+    inferred = exchange_from_ticker(symbol)
+    if inferred and key in ("SMART", "") and "." not in symbol:
+        return symbol
+
+    return symbol
 
 
 def _row(
@@ -76,35 +120,6 @@ def _row(
         "Buy Price": normalize_gbp_pence_to_pounds(buy_price, resolved_currency),
         "Total Fees": normalize_gbp_pence_to_pounds(total_fees, resolved_currency),
     }
-
-
-def _cpapi_get(path: str) -> Any:
-    url = f"{IBKR_CPAPI_URL.rstrip('/')}/{path.lstrip('/')}"
-    resp = requests.get(url, verify=IBKR_VERIFY_SSL, timeout=30)
-    resp.raise_for_status()
-    return resp.json()
-
-
-def _ensure_authenticated() -> None:
-    status = _cpapi_get("iserver/auth/status")
-    if isinstance(status, dict) and status.get("authenticated"):
-        return
-    raise RuntimeError(
-        "IBKR Client Portal not authenticated. Log in at "
-        "https://localhost:5000 (or your gateway), then retry."
-    )
-
-
-def _default_account_id() -> str:
-    accounts = _cpapi_get("portfolio/accounts")
-    if isinstance(accounts, list) and accounts:
-        first = accounts[0]
-        if isinstance(first, dict):
-            return str(first.get("accountId") or first.get("id") or "")
-        return str(first)
-    if isinstance(accounts, dict):
-        return str(accounts.get("accountId") or accounts.get("id") or "")
-    raise ValueError("No IBKR accounts returned from /portfolio/accounts")
 
 
 def _from_csv(path) -> list[dict[str, Any]]:
@@ -136,48 +151,78 @@ def _from_csv(path) -> list[dict[str, Any]]:
     return rows
 
 
-def _positions_from_ibkr(account_id: str) -> list[dict[str, Any]]:
-    _ensure_authenticated()
-    page = 0
-    rows: list[dict[str, Any]] = []
-    while True:
-        data = _cpapi_get(
-            f"portfolio/{account_id}/positions/{page}"
+def _positions_from_ib_insync() -> list[dict[str, Any]]:
+    from ib_insync import IB
+
+    ib = IB()
+    try:
+        ib.connect(
+            IBKR_HOST,
+            IBKR_PORT,
+            clientId=IBKR_CLIENT_ID,
+            readonly=IBKR_READONLY,
+            timeout=IBKR_CONNECT_TIMEOUT,
         )
-        if not data:
-            break
-        items = data if isinstance(data, list) else data.get("positions", [])
-        if not items:
-            break
-        for pos in items:
-            if not isinstance(pos, dict):
+    except Exception as e:
+        raise RuntimeError(
+            f"Cannot connect to TWS/IB Gateway at {IBKR_HOST}:{IBKR_PORT} "
+            f"(clientId={IBKR_CLIENT_ID}): {e}"
+        ) from e
+
+    try:
+        account_filter = IBKR_ACCOUNT_ID.strip() if IBKR_ACCOUNT_ID else ""
+        positions = ib.positions()
+        if account_filter:
+            positions = [p for p in positions if p.account == account_filter]
+
+        rows: list[dict[str, Any]] = []
+        for pos in positions:
+            qty = float(pos.position)
+            if qty == 0:
                 continue
-            ticker = (
-                pos.get("ticker")
-                or pos.get("contractDesc")
-                or pos.get("description")
-                or ""
+
+            contract = pos.contract
+            sec_type = (getattr(contract, "secType", None) or "").upper()
+            if sec_type and sec_type not in ("STK", "ETF", "FOP", "OPT", "WAR"):
+                logger.debug(
+                    "IBKR: skip %s position in %s",
+                    sec_type,
+                    getattr(contract, "symbol", ""),
+                )
+                continue
+
+            ticker = _contract_to_ticker(contract)
+            if not ticker:
+                continue
+
+            long_name = getattr(contract, "longName", None) or getattr(
+                contract, "description", None
             )
-            if not str(ticker).strip():
-                continue
+            avg_cost = float(pos.avgCost) if pos.avgCost else None
+            # IB reports avgCost as total cost per share in contract currency (not pence)
             rows.append(
                 _row(
                     ticker=ticker,
-                    full_name=pos.get("description") or pos.get("contractDesc"),
-                    source=_ibkr_market_source(pos),
-                    currency=pos.get("currency") or pos.get("cur"),
-                    shares=pos.get("position") or pos.get("quantity"),
-                    open_date=pos.get("openDate") or pos.get("open_date"),
-                    buy_price=pos.get("avgCost")
-                    or pos.get("avgPrice")
-                    or pos.get("costBasis"),
-                    total_fees=pos.get("fees") or pos.get("commissions"),
+                    full_name=long_name,
+                    source=_contract_market_source(contract),
+                    currency=getattr(contract, "currency", None),
+                    shares=qty,
+                    open_date=None,
+                    buy_price=avg_cost,
+                    total_fees=0.0,
                 )
             )
-        page += 1
-        if len(items) < 100:
-            break
-    return rows
+
+        logger.info(
+            "IBKR ib_insync: %d position(s) from %s:%s",
+            len(rows),
+            IBKR_HOST,
+            IBKR_PORT,
+        )
+        return rows
+    finally:
+        if ib.isConnected():
+            ib.disconnect()
 
 
 def fetch_ibkr_positions() -> list[dict[str, Any]]:
@@ -188,6 +233,4 @@ def fetch_ibkr_positions() -> list[dict[str, Any]]:
         logger.info("IBKR: loading positions from CSV %s", IBKR_CSV_PATH)
         return _from_csv(IBKR_CSV_PATH)
 
-    account_id = IBKR_ACCOUNT_ID or _default_account_id()
-    logger.info("IBKR: fetching positions for account %s", account_id)
-    return _positions_from_ibkr(account_id)
+    return _positions_from_ib_insync()
