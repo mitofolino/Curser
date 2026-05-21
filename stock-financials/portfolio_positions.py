@@ -28,6 +28,7 @@ PORTFOLIO_COLUMNS = [
     "Open Exchange Rate",
     "Investment EUR",
     "Update Date",
+    "Price",
 ]
 
 # Human-readable headers for Numbers / Excel (units in square brackets)
@@ -44,6 +45,7 @@ PORTFOLIO_DISPLAY_NAMES: dict[str, str] = {
     "Open Exchange Rate": "Open Exchange Rate [EUR→local]",
     "Investment EUR": "Investment [EUR]",
     "Update Date": "Update Date [UTC]",
+    "Price": "Price [local]",
 }
 
 # Filled by Numbers/Excel formulas on export (see portfolio_formulas.py)
@@ -191,6 +193,14 @@ def enrich_portfolio_fields(df: pd.DataFrame) -> pd.DataFrame:
     }
     prefetch_rates_to_eur_on_dates(pairs)
 
+    from portfolio_quotes import fetch_last_prices
+
+    tickers = [str(out.at[idx, "Ticker"]).strip() for idx in out.index]
+    last_prices = fetch_last_prices(tickers)
+    for idx in out.index:
+        sym = str(out.at[idx, "Ticker"]).strip().upper()
+        out.at[idx, "Price"] = last_prices.get(sym)
+
     return out
 
 
@@ -207,6 +217,7 @@ _PORTFOLIO_FORMATTERS: dict[str, Any] = {
     "Open Exchange Rate": _fmt_fx_rate,
     "Investment EUR": _fmt_price,
     "Update Date": _fmt_open_date,
+    "Price": _fmt_price,
 }
 
 

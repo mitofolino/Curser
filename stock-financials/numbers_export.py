@@ -8,7 +8,12 @@ from pathlib import Path
 import pandas as pd
 
 from config import PORTFOLIO_DATA_START_ROW
-from numbers_format import apply_column_formats, coerce_cell_value, infer_column_format
+from numbers_format import (
+    apply_column_format,
+    apply_column_formats,
+    coerce_cell_value,
+    infer_column_format,
+)
 from portfolio_formulas import apply_portfolio_formulas_numbers
 from portfolio_positions import (
     PORTFOLIO_DISPLAY_NAMES,
@@ -20,6 +25,9 @@ logger = logging.getLogger(__name__)
 # 1-based row in Numbers → 0-based index
 PORTFOLIO_HEADER_ROW = 0
 PORTFOLIO_DATA_ROW_INDEX = PORTFOLIO_DATA_START_ROW - 1
+
+# Column M (0-based 12): current price after Update Date
+PORTFOLIO_PRICE_COL = 12
 
 
 def _write_cell(table, row: int, col: int, value) -> None:
@@ -60,6 +68,8 @@ def _header_column_map(table, expected_columns: list[str]) -> dict[str, int]:
         aliases[internal.lower()] = display
         aliases[display.lower()] = display
     aliases["broker"] = PORTFOLIO_DISPLAY_NAMES["Source"]
+    aliases["price"] = PORTFOLIO_DISPLAY_NAMES["Price"]
+    aliases["prices"] = PORTFOLIO_DISPLAY_NAMES["Price"]
 
     mapping: dict[str, int] = {}
     for c in range(table.num_cols):
@@ -108,6 +118,47 @@ def _write_portfolio_table(table, df: pd.DataFrame) -> None:
         num_rows=len(df),
         col_map=col_map,
     )
+    _write_price_column_m(table, df, col_map)
+
+
+def _ticker_column(df: pd.DataFrame, col_map: dict[str, int]) -> str | None:
+    for name in ("Ticker", PORTFOLIO_DISPLAY_NAMES["Ticker"]):
+        if name in df.columns:
+            return name
+    for col in df.columns:
+        if "ticker" in col.lower():
+            return col
+    return None
+
+
+def _write_price_column_m(
+    table, df: pd.DataFrame, col_map: dict[str, int]
+) -> None:
+    """Write current price to column M (Price [local]), matching template layout."""
+    price_header = PORTFOLIO_DISPLAY_NAMES["Price"]
+    price_col = col_map.get(price_header, PORTFOLIO_PRICE_COL)
+    if price_header not in df.columns or df.empty:
+        return
+
+    raw_header = table.cell(PORTFOLIO_HEADER_ROW, price_col).value
+    if raw_header:
+        price_header = str(raw_header).strip()
+
+    price_fmt = infer_column_format(PORTFOLIO_DISPLAY_NAMES["Price"])
+    for r in range(len(df)):
+        value = coerce_cell_value(df.iloc[r][PORTFOLIO_DISPLAY_NAMES["Price"]], price_fmt)
+        if value == "":
+            continue
+        _write_cell(table, PORTFOLIO_DATA_ROW_INDEX + r, price_col, value)
+
+    apply_column_format(
+        table,
+        price_col,
+        price_header,
+        data_start_row=PORTFOLIO_DATA_ROW_INDEX,
+        num_rows=len(df),
+    )
+    logger.info("Wrote current prices to column M for %d row(s)", len(df))
 
 
 def _sheet_by_name(doc, name: str):

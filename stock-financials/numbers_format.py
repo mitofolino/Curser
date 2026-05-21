@@ -117,7 +117,9 @@ def coerce_cell_value(value: Any, fmt: ColumnFormat) -> Any:
 
     if fmt.kind in ("number", "currency"):
         num = _to_float(value)
-        return "" if num is None else num
+        if num is None:
+            return ""
+        return round(num, fmt.decimal_places)
 
     if isinstance(value, bool):
         return "Yes" if value else "No"
@@ -144,6 +146,27 @@ def _format_kwargs(fmt: ColumnFormat) -> tuple[str, dict[str, Any]]:
             "show_thousands_separator": fmt.thousands,
         }
     return "text", {}
+
+
+def apply_column_format(
+    table,
+    col: int,
+    header: str,
+    *,
+    data_start_row: int,
+    num_rows: int,
+) -> None:
+    """Apply inferred format to one column across data rows."""
+    fmt = infer_column_format(header)
+    if fmt.kind == "text":
+        return
+    format_name, kwargs = _format_kwargs(fmt)
+    for r in range(num_rows):
+        out_row = data_start_row + r
+        try:
+            table.set_cell_formatting(out_row, col, format_name, **kwargs)
+        except (TypeError, IndexError, ValueError):
+            pass
 
 
 def apply_column_formats(
