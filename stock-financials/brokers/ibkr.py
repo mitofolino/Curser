@@ -170,8 +170,14 @@ def _positions_from_ib_insync() -> list[dict[str, Any]]:
         ) from e
 
     try:
+        accounts = ib.managedAccounts()
+        logger.info("IBKR connected; accounts: %s", ", ".join(accounts) or "(none)")
+
         account_filter = IBKR_ACCOUNT_ID.strip() if IBKR_ACCOUNT_ID else ""
+        ib.sleep(0.5)
         positions = ib.positions()
+        if positions:
+            ib.qualifyContracts(*(p.contract for p in positions))
         if account_filter:
             positions = [p for p in positions if p.account == account_filter]
 

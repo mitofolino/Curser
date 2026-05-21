@@ -131,6 +131,8 @@ def normalize_market_source(value: str | None) -> str | None:
         return "NASDAQ"
     if "NYSE" in text:
         return "NYSE"
+    if text.startswith("LSE") or text == "LSEETF":
+        return "LSE"
     return text
 
 

@@ -259,12 +259,20 @@ def download_statements(
         _fill_fmp_quarterly_gaps(ticker, yahoo_used, sheets)
 
     if not sheets:
+        if not _is_etf_or_fund(info):
+            logger.error(
+                "%s: no financial statement data (quoteType=%s is not a fund)",
+                ticker,
+                info.get("quoteType") or "?",
+            )
+            return [], {}, "unknown"
         etf_path = _export_etf_workbook(ticker, info, out_dir)
-        if etf_path or any(out_dir.glob(f"{ticker}_*_etf_overview.xlsx")):
+        existing = list(out_dir.glob(f"{ticker}_*_etf_overview.xlsx"))
+        if etf_path or existing:
             meta = _overview_dict(ticker, info, yahoo_used, {})
             meta["quote_type"] = info.get("quoteType")
             return ([etf_path] if etf_path else []), meta, "etf"
-        logger.error("%s: no financial statement data from Yahoo Finance", ticker)
+        logger.error("%s: no financial statement or ETF overview data", ticker)
         return [], {}, "unknown"
 
     overview = _overview_dict(ticker, info, yahoo_used, sheets)
