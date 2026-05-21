@@ -59,6 +59,41 @@ PORTFOLIO_EXPORT_COLUMNS = [
 
 _DISPLAY_TO_INTERNAL = {v: k for k, v in PORTFOLIO_DISPLAY_NAMES.items()}
 
+# Sheet headers without units → internal column key
+PORTFOLIO_LEGACY_HEADER_ALIASES: dict[str, str] = {
+    "name": "Full Name",
+    "instrument name": "Full Name",
+    "shares": "Shares",
+    "price": "Price",
+    "prices": "Price",
+    "value": "Value",
+    "investment (eur)": "Investment EUR",
+    "investment [eur]": "Investment EUR",
+}
+
+
+def canonical_portfolio_header(label: str) -> str | None:
+    """Map any portfolio header (legacy or canonical) to display name with units."""
+    if not label or not str(label).strip():
+        return None
+    key = str(label).strip().lower()
+    if key in _DISPLAY_TO_INTERNAL:
+        internal = _DISPLAY_TO_INTERNAL[key]
+        return PORTFOLIO_DISPLAY_NAMES[internal]
+    if key in PORTFOLIO_LEGACY_HEADER_ALIASES:
+        internal = PORTFOLIO_LEGACY_HEADER_ALIASES[key]
+        if internal in PORTFOLIO_DISPLAY_NAMES:
+            return PORTFOLIO_DISPLAY_NAMES[internal]
+    for internal, display in PORTFOLIO_DISPLAY_NAMES.items():
+        d = display.lower()
+        if key == d or key.startswith(d.split("[")[0].strip().lower()):
+            return display
+        if "eur2" in key and internal == "Open Exchange Rate" and "open" in key:
+            return display
+        if "eur2" in key and internal == "Exchange Rate" and "open" not in key:
+            return display
+    return None
+
 
 def _is_blank(value: Any) -> bool:
     if value is None:

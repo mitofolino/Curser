@@ -18,6 +18,7 @@ from portfolio_formulas import apply_portfolio_formulas_numbers
 from portfolio_positions import (
     PORTFOLIO_DISPLAY_NAMES,
     PORTFOLIO_EXPORT_COLUMNS,
+    canonical_portfolio_header,
 )
 
 logger = logging.getLogger(__name__)
@@ -79,7 +80,7 @@ def _header_column_map(table, expected_columns: list[str]) -> dict[str, int]:
         if raw is None:
             continue
         header = str(raw).strip()
-        key = aliases.get(header.lower())
+        key = aliases.get(header.lower()) or canonical_portfolio_header(header)
         if key:
             mapping[key] = c
     for i, col in enumerate(expected_columns):
@@ -93,15 +94,20 @@ def _clear_data_rows(table, start_row: int) -> None:
             table.write(r, c, "")
 
 
+def _sync_portfolio_headers(
+    table, col_map: dict[str, int], columns: list[str]
+) -> None:
+    """Write canonical headers with units (row 1) for all exported columns."""
+    for col_name in columns:
+        if col_name in col_map:
+            table.write(PORTFOLIO_HEADER_ROW, col_map[col_name], col_name)
+
+
 def _write_portfolio_table(table, df: pd.DataFrame) -> None:
-    """Keep row 1 headers; write positions from row 2 onward."""
+    """Sync unit headers on row 1; write positions from row 2 onward."""
     columns = list(df.columns)
     col_map = _header_column_map(table, columns)
-
-    if not any(table.cell(PORTFOLIO_HEADER_ROW, c).value for c in range(table.num_cols)):
-        for col, idx in col_map.items():
-            if col in columns:
-                table.write(PORTFOLIO_HEADER_ROW, idx, col)
+    _sync_portfolio_headers(table, col_map, columns)
 
     _clear_data_rows(table, PORTFOLIO_DATA_ROW_INDEX)
 
@@ -142,11 +148,7 @@ def _write_price_column_m(
     if price_header not in df.columns or df.empty:
         return
 
-    raw_header = table.cell(PORTFOLIO_HEADER_ROW, price_col).value
-    if raw_header:
-        price_header = str(raw_header).strip()
-
-    price_fmt = infer_column_format(PORTFOLIO_DISPLAY_NAMES["Price"])
+    price_fmt = infer_column_format(price_header)
     for r in range(len(df)):
         value = coerce_cell_value(df.iloc[r][PORTFOLIO_DISPLAY_NAMES["Price"]], price_fmt)
         if value == "":
@@ -156,11 +158,15 @@ def _write_price_column_m(
     apply_column_format(
         table,
         price_col,
-        price_header,
+        PORTFOLIO_DISPLAY_NAMES["Price"],
         data_start_row=PORTFOLIO_DATA_ROW_INDEX,
         num_rows=len(df),
     )
-    logger.info("Wrote current prices to column M for %d row(s)", len(df))
+    logger.info(
+        "Wrote current prices to column M (%s) for %d row(s)",
+        PORTFOLIO_DISPLAY_NAMES["Price"],
+        len(df),
+    )
 
 
 def _sheet_by_name(doc, name: str):

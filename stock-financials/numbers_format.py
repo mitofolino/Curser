@@ -40,20 +40,32 @@ def infer_column_format(header: str) -> ColumnFormat:
     if "[%]" in h:
         return ColumnFormat("percentage", decimal_places=2, thousands=False)
 
-    if "eur→local" in h or "exchange rate" in h or "fx rate" in h:
+    if "eur→local" in h or "eur2" in h or (
+        "exchange rate" in h and "open" in h
+    ):
         return ColumnFormat("number", decimal_places=6, thousands=False)
 
     if "p/e" in h:
         return ColumnFormat("number", decimal_places=2, thousands=False)
 
-    if "[eur]" in h:
+    if "[eur]" in h or "(eur)" in h:
         return ColumnFormat("currency", currency_code="EUR", decimal_places=2)
 
-    if "[local]" in h:
+    if "[local]" in h or h in (
+        "price",
+        "prices",
+        "buy price",
+        "total fees",
+        "investment",
+        "value",
+    ):
         return ColumnFormat("number", decimal_places=2, thousands=True)
 
-    if "[units]" in h:
+    if "[units]" in h or h == "shares":
         return ColumnFormat("number", decimal_places=4, thousands=True)
+
+    if "update date" in h or h == "open date":
+        return ColumnFormat("datetime")
 
     if "[ratio]" in h or "p/e" in h or "fx rate" in h:
         return ColumnFormat("number", decimal_places=4, thousands=False)
