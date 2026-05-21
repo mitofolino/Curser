@@ -8,7 +8,12 @@ from pathlib import Path
 import pandas as pd
 
 from config import PORTFOLIO_DATA_START_ROW
-from portfolio_positions import PORTFOLIO_COLUMNS
+from portfolio_formulas import apply_portfolio_formulas_numbers
+from portfolio_positions import (
+    PORTFOLIO_COLUMNS,
+    PORTFOLIO_DISPLAY_NAMES,
+    PORTFOLIO_EXPORT_COLUMNS,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -44,18 +49,25 @@ def _write_dataframe(table, df: pd.DataFrame, *, data_start_row: int = 0) -> Non
             table.write(out_row, c, _cell_value(df.iloc[r][name]))
 
 
-def _header_column_map(table) -> dict[str, int]:
-    """Map PORTFOLIO_COLUMNS to column index from row 1 headers."""
+def _header_column_map(table, expected_columns: list[str]) -> dict[str, int]:
+    """Map export column names to column index from row 1 headers."""
+    aliases: dict[str, str] = {}
+    for col in expected_columns:
+        aliases[col.lower()] = col
+    for internal, display in PORTFOLIO_DISPLAY_NAMES.items():
+        aliases[internal.lower()] = display
+        aliases[display.lower()] = display
+
     mapping: dict[str, int] = {}
     for c in range(table.num_cols):
         raw = table.cell(PORTFOLIO_HEADER_ROW, c).value
         if raw is None:
             continue
         header = str(raw).strip()
-        for col in PORTFOLIO_COLUMNS:
-            if header.lower() == col.lower():
-                mapping[col] = c
-    for i, col in enumerate(PORTFOLIO_COLUMNS):
+        key = aliases.get(header.lower())
+        if key:
+            mapping[key] = c
+    for i, col in enumerate(expected_columns):
         mapping.setdefault(col, i)
     return mapping
 
@@ -68,18 +80,20 @@ def _clear_data_rows(table, start_row: int) -> None:
 
 def _write_portfolio_table(table, df: pd.DataFrame) -> None:
     """Keep row 1 headers; write positions from row 2 onward."""
-    col_map = _header_column_map(table)
+    columns = list(df.columns)
+    col_map = _header_column_map(table, columns)
 
     if not any(table.cell(PORTFOLIO_HEADER_ROW, c).value for c in range(table.num_cols)):
         for col, idx in col_map.items():
-            table.write(PORTFOLIO_HEADER_ROW, idx, col)
+            if col in columns:
+                table.write(PORTFOLIO_HEADER_ROW, idx, col)
 
     _clear_data_rows(table, PORTFOLIO_DATA_ROW_INDEX)
 
     for r in range(len(df)):
         out_row = PORTFOLIO_DATA_ROW_INDEX + r
-        for col in PORTFOLIO_COLUMNS:
-            if col not in df.columns:
+        for col in columns:
+            if col not in col_map:
                 continue
             table.write(out_row, col_map[col], _cell_value(df.iloc[r][col]))
 
@@ -123,7 +137,7 @@ def _upsert_portfolio_sheet(doc, name: str, df: pd.DataFrame) -> None:
         raise RuntimeError(f"Could not create Numbers sheet: {name}")
 
     min_rows = PORTFOLIO_DATA_ROW_INDEX + max(len(df), 1)
-    min_cols = max(len(PORTFOLIO_COLUMNS), 1)
+    min_cols = max(len(df.columns), 1)
     if sheet.tables:
         table = sheet.tables[0]
     else:
@@ -160,6 +174,9 @@ def update_portfolio_sheet_only(
         len(portfolio_df),
         PORTFOLIO_DATA_START_ROW,
     )
+    apply_portfolio_formulas_numbers(
+        path, portfolio_sheet=portfolio_sheet, num_data_rows=len(portfolio_df)
+    )
     return path
 
 
@@ -189,4 +206,7 @@ def save_to_numbers(
     _upsert_summary_sheet(doc, summary_sheet, summary_df)
     _upsert_portfolio_sheet(doc, portfolio_sheet, portfolio_df)
     doc.save(path)
+    apply_portfolio_formulas_numbers(
+        path, portfolio_sheet=portfolio_sheet, num_data_rows=len(portfolio_df)
+    )
     return path

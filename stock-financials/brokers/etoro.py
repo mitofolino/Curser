@@ -7,7 +7,7 @@ import json
 import logging
 import time
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -28,13 +28,34 @@ logger = logging.getLogger(__name__)
 PORTFOLIO_PATH = "/trading/info/portfolio"
 
 
-def _parse_date(value: Any) -> Any:
+def _format_open_datetime(dt: datetime) -> str:
+    if dt.tzinfo is not None:
+        dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
+    return dt.replace(microsecond=0).strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _parse_open_datetime(value: Any) -> str | None:
+    """Preserve date and time from eToro openDateTime (ISO-8601, UTC)."""
     if value is None or value == "":
         return None
     if isinstance(value, datetime):
-        return value.date().isoformat()
-    text = str(value)
-    return text[:10] if len(text) >= 10 else text
+        return _format_open_datetime(value)
+
+    text = str(value).strip()
+    if not text:
+        return None
+
+    normalized = text.replace("Z", "+00:00")
+    try:
+        return _format_open_datetime(datetime.fromisoformat(normalized))
+    except ValueError:
+        pass
+
+    if "T" in text and len(text) >= 19:
+        return text[:10] + " " + text[11:19]
+    if len(text) >= 10:
+        return text[:10]
+    return text
 
 
 def _row(
@@ -53,7 +74,7 @@ def _row(
         "Source": "etoro",
         "Currency": currency or None,
         "Shares": shares,
-        "Open Date": _parse_date(open_date),
+        "Open Date": _parse_open_datetime(open_date),
         "Buy Price": buy_price,
         "Total Fees": total_fees,
     }

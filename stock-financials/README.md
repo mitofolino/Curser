@@ -79,7 +79,7 @@ python main.py --cleanup   # remove old statements/ and sec/ subfolders
 
 `portfolio_summary.numbers` (default) includes a **`portfolio`** table with columns:
 
-`Ticker`, `Full Name`, `Source`, `Currency`, `Shares`, `Open Date`, `Buy Price`, `Total Fees`
+`Ticker`, `Instrument Name`, `Broker`, `Currency`, `Shares [units]`, `Open Date [UTC]`, `Buy Price [local]`, `Total Fees [local]`, `Investment [local]` (= Shares × Buy Price − Fees), `Open Exchange Rate [EUR→local]` (Frankfurter rate on open date), `Investment [EUR]` (= Investment ÷ Open Exchange Rate), `Update Date [UTC]`
 
 Configure brokers in `.env` (see `.env.example`). On each `python main.py` run, live positions are merged into that sheet.
 

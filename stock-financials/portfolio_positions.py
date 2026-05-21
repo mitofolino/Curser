@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 import pandas as pd
 
 from config import OUTPUT_DIR, PORTFOLIO_NUMBERS_PATH, PORTFOLIO_SHEET_NAME
+from fx_rates import eur_to_local_rate_on_date, prefetch_rates_to_eur_on_dates
 from layout import PORTFOLIO_SUMMARY_FILENAME
 
 logger = logging.getLogger(__name__)
@@ -22,11 +24,197 @@ PORTFOLIO_COLUMNS = [
     "Open Date",
     "Buy Price",
     "Total Fees",
+    "Investment",
+    "Open Exchange Rate",
+    "Investment EUR",
+    "Update Date",
+]
+
+# Human-readable headers for Numbers / Excel (units in square brackets)
+PORTFOLIO_DISPLAY_NAMES: dict[str, str] = {
+    "Ticker": "Ticker",
+    "Full Name": "Instrument Name",
+    "Source": "Broker",
+    "Currency": "Currency",
+    "Shares": "Shares [units]",
+    "Open Date": "Open Date [UTC]",
+    "Buy Price": "Buy Price [local]",
+    "Total Fees": "Total Fees [local]",
+    "Investment": "Investment [local]",
+    "Open Exchange Rate": "Open Exchange Rate [EUR→local]",
+    "Investment EUR": "Investment [EUR]",
+    "Update Date": "Update Date [UTC]",
+}
+
+# Filled by Numbers/Excel formulas on export (see portfolio_formulas.py)
+PORTFOLIO_FORMULA_COLUMNS = frozenset({"Investment", "Investment EUR"})
+
+PORTFOLIO_EXPORT_COLUMNS = [
+    PORTFOLIO_DISPLAY_NAMES[c] for c in PORTFOLIO_COLUMNS
 ]
 
 
+def _is_blank(value: Any) -> bool:
+    if value is None:
+        return True
+    if isinstance(value, float) and pd.isna(value):
+        return True
+    if isinstance(value, str) and not value.strip():
+        return True
+    return False
+
+
+def _fmt_text(value: Any) -> str:
+    if _is_blank(value):
+        return ""
+    return str(value).strip()
+
+
+def _fmt_ticker(value: Any) -> str:
+    return _fmt_text(value).upper()
+
+
+def _fmt_broker(value: Any) -> str:
+    text = _fmt_text(value).lower()
+    if text == "etoro":
+        return "eToro"
+    if text == "ibkr":
+        return "IBKR"
+    return _fmt_text(value).title()
+
+
+def _fmt_currency(value: Any) -> str:
+    return _fmt_text(value).upper()
+
+
+def _fmt_shares(value: Any) -> str:
+    if _is_blank(value):
+        return ""
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return str(value)
+    places = 6 if abs(v) < 1 else 4
+    return f"{v:.{places}f}".rstrip("0").rstrip(".")
+
+
+def _fmt_price(value: Any) -> str:
+    if _is_blank(value):
+        return ""
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return str(value)
+    places = 4 if abs(v) < 10 else 2
+    return f"{v:.{places}f}".rstrip("0").rstrip(".")
+
+
+def _fmt_fees(value: Any) -> str:
+    if _is_blank(value):
+        return ""
+    try:
+        return f"{float(value):.2f}"
+    except (TypeError, ValueError):
+        return str(value)
+
+
+def _fmt_open_date(value: Any) -> str:
+    return _fmt_text(value)
+
+
+def _fmt_fx_rate(value: Any) -> str:
+    if _is_blank(value):
+        return ""
+    try:
+        return f"{float(value):.6f}".rstrip("0").rstrip(".")
+    except (TypeError, ValueError):
+        return str(value)
+
+
+def _fmt_investment_placeholder(value: Any) -> str:
+    """Formula columns: leave empty for Numbers/Excel to fill."""
+    return ""
+
+
+def _to_float(value: Any) -> float | None:
+    if _is_blank(value):
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def enrich_portfolio_fields(df: pd.DataFrame) -> pd.DataFrame:
+    """Add FX rate, update timestamp; Investment columns use sheet formulas."""
+    if df.empty:
+        return df
+
+    out = _align_template_columns(df).copy()
+    pairs = {
+        (row.get("Currency"), str(row.get("Open Date") or "")[:10])
+        for _, row in out.iterrows()
+        if row.get("Currency")
+    }
+    prefetch_rates_to_eur_on_dates(pairs)
+
+    now = datetime.now(timezone.utc).replace(microsecond=0).strftime("%Y-%m-%d %H:%M:%S")
+    for idx in out.index:
+        currency = out.at[idx, "Currency"]
+        open_date = out.at[idx, "Open Date"]
+        fx = eur_to_local_rate_on_date(currency, open_date)
+        out.at[idx, "Open Exchange Rate"] = fx
+        out.at[idx, "Update Date"] = now
+
+        shares = _to_float(out.at[idx, "Shares"])
+        price = _to_float(out.at[idx, "Buy Price"])
+        fees = _to_float(out.at[idx, "Total Fees"]) or 0.0
+        if shares is not None and price is not None:
+            investment = shares * price - fees
+            out.at[idx, "Investment"] = investment
+            if fx:
+                out.at[idx, "Investment EUR"] = investment / fx
+            else:
+                out.at[idx, "Investment EUR"] = None
+        else:
+            out.at[idx, "Investment"] = None
+            out.at[idx, "Investment EUR"] = None
+
+    return out
+
+
+_PORTFOLIO_FORMATTERS: dict[str, Any] = {
+    "Ticker": _fmt_ticker,
+    "Full Name": _fmt_text,
+    "Source": _fmt_broker,
+    "Currency": _fmt_currency,
+    "Shares": _fmt_shares,
+    "Open Date": _fmt_open_date,
+    "Buy Price": _fmt_price,
+    "Total Fees": _fmt_fees,
+    "Investment": _fmt_price,
+    "Open Exchange Rate": _fmt_fx_rate,
+    "Investment EUR": _fmt_price,
+    "Update Date": _fmt_open_date,
+}
+
+
+def prepare_portfolio_for_display(df: pd.DataFrame) -> pd.DataFrame:
+    """Readable headers and formatted values for Numbers / Excel export."""
+    if df.empty:
+        return pd.DataFrame(columns=PORTFOLIO_EXPORT_COLUMNS)
+    out = _align_template_columns(df).copy()
+    for col in PORTFOLIO_COLUMNS:
+        if col not in out.columns:
+            continue
+        formatter = _PORTFOLIO_FORMATTERS.get(col, _fmt_text)
+        out[col] = out[col].map(formatter)
+    out = out.rename(columns=PORTFOLIO_DISPLAY_NAMES)
+    return out[PORTFOLIO_EXPORT_COLUMNS]
+
+
 def _empty_portfolio_df() -> pd.DataFrame:
-    return pd.DataFrame(columns=PORTFOLIO_COLUMNS)
+    return pd.DataFrame(columns=PORTFOLIO_EXPORT_COLUMNS)
 
 
 def _normalize_row(row: dict[str, Any]) -> dict[str, Any]:
@@ -37,9 +225,11 @@ def _align_template_columns(df: pd.DataFrame) -> pd.DataFrame:
     rename: dict[str, str] = {}
     lower_map = {c.strip().lower(): c for c in df.columns}
     for target in PORTFOLIO_COLUMNS:
-        key = target.lower()
-        if key in lower_map:
-            rename[lower_map[key]] = target
+        for alias in (target, PORTFOLIO_DISPLAY_NAMES[target]):
+            key = alias.lower()
+            if key in lower_map:
+                rename[lower_map[key]] = target
+                break
     out = df.rename(columns=rename)
     for col in PORTFOLIO_COLUMNS:
         if col not in out.columns:
@@ -78,9 +268,8 @@ def read_portfolio_template(path: Path | None = None) -> pd.DataFrame | None:
                     str(table.cell(0, c).value or "").strip()
                     for c in range(table.num_cols)
                 ]
-                if "Ticker" not in headers and "ticker" not in [
-                    h.lower() for h in headers
-                ]:
+                header_lower = [h.lower() for h in headers]
+                if "ticker" not in header_lower and "instrument name" not in header_lower:
                     continue
                 rows = []
                 for r in range(1, table.num_rows):
@@ -143,8 +332,8 @@ def fetch_all_positions() -> pd.DataFrame:
 
 
 def build_portfolio_dataframe() -> pd.DataFrame:
-    """Live positions from eToro + IBKR APIs (or CSV fallbacks)."""
-    return fetch_all_positions()
+    """Live positions from eToro + IBKR, formatted for Numbers / Excel export."""
+    return prepare_portfolio_for_display(enrich_portfolio_fields(fetch_all_positions()))
 
 
 def portfolio_summary_path() -> Path:

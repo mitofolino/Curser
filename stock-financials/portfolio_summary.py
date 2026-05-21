@@ -47,6 +47,37 @@ SUMMARY_COLUMNS = [
     "website",
 ]
 
+# Human-readable headers for Numbers / Excel (units in square brackets)
+SUMMARY_DISPLAY_NAMES: dict[str, str] = {
+    "ticker": "Ticker",
+    "company": "Company",
+    "country": "Country",
+    "currency": "Currency",
+    "sector": "Sector",
+    "industry": "Industry",
+    "yahoo_symbol": "Yahoo Symbol",
+    "instrument_type": "Instrument Type",
+    "market_cap": "Market Cap [local]",
+    "market_cap_eur": "Market Cap [EUR]",
+    "trailing_pe": "P/E Ratio (TTM)",
+    "forward_pe": "Forward P/E",
+    "dividend_yield": "Dividend Yield [%]",
+    "profit_margins": "Profit Margin [%]",
+    "return_on_equity": "Return on Equity [%]",
+    "debt_to_equity": "Debt to Equity [ratio]",
+    "free_cashflow": "Free Cash Flow [local]",
+    "free_cashflow_eur": "Free Cash Flow [EUR]",
+    "revenue_latest": "Revenue Latest [local]",
+    "revenue_latest_eur": "Revenue Latest [EUR]",
+    "fx_rate_to_eur": "FX Rate to EUR",
+    "revenue_growth_5y": "Revenue Growth 5Y [%]",
+    "has_annual_statements": "Annual Statements",
+    "has_quarterly_statements": "Quarterly Statements",
+    "sec_filing": "SEC Filing",
+    "status": "Status",
+    "website": "Website",
+}
+
 
 @dataclass
 class TickerResult:
@@ -67,6 +98,139 @@ def _pct(value: Any) -> Any:
         return round(v * 100, 2) if abs(v) <= 1.5 else round(v, 2)
     except (TypeError, ValueError):
         return value
+
+
+def _is_blank(value: Any) -> bool:
+    if value is None:
+        return True
+    if isinstance(value, float) and pd.isna(value):
+        return True
+    if isinstance(value, str) and not value.strip():
+        return True
+    return False
+
+
+def _fmt_compact_amount(value: Any) -> str:
+    """Large monetary values: 1.23 B, 456.7 M, 12.3 K."""
+    if _is_blank(value):
+        return ""
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return str(value)
+    sign = "-" if v < 0 else ""
+    n = abs(v)
+    for threshold, suffix in (
+        (1e12, "T"),
+        (1e9, "B"),
+        (1e6, "M"),
+        (1e3, "K"),
+    ):
+        if n >= threshold:
+            return f"{sign}{n / threshold:.2f} {suffix}"
+    return f"{sign}{n:,.0f}"
+
+
+def _fmt_decimal(value: Any, places: int = 2) -> str:
+    if _is_blank(value):
+        return ""
+    try:
+        return f"{float(value):.{places}f}"
+    except (TypeError, ValueError):
+        return str(value)
+
+
+def _fmt_percent(value: Any) -> str:
+    if _is_blank(value):
+        return ""
+    try:
+        return f"{float(value):.2f}"
+    except (TypeError, ValueError):
+        return str(value)
+
+
+def _fmt_fx_rate(value: Any) -> str:
+    if _is_blank(value):
+        return ""
+    try:
+        return f"{float(value):.4f}"
+    except (TypeError, ValueError):
+        return str(value)
+
+
+def _fmt_yes_no(value: Any) -> str:
+    if _is_blank(value):
+        return ""
+    if isinstance(value, bool):
+        return "Yes" if value else "No"
+    text = str(value).strip().lower()
+    if text in ("1", "true", "yes", "y"):
+        return "Yes"
+    if text in ("0", "false", "no", "n"):
+        return "No"
+    return str(value)
+
+
+def _fmt_text(value: Any) -> str:
+    if _is_blank(value):
+        return ""
+    return str(value).strip()
+
+
+def _fmt_instrument_type(value: Any) -> str:
+    if _is_blank(value):
+        return ""
+    return str(value).strip().replace("_", " ").title()
+
+
+def _fmt_status(value: Any) -> str:
+    text = _fmt_text(value)
+    if not text:
+        return ""
+    return text.upper() if text.lower() == "ok" else text.title()
+
+
+_SUMMARY_FORMATTERS: dict[str, Any] = {
+    "ticker": _fmt_text,
+    "company": _fmt_text,
+    "country": _fmt_text,
+    "currency": _fmt_text,
+    "sector": _fmt_text,
+    "industry": _fmt_text,
+    "yahoo_symbol": _fmt_text,
+    "instrument_type": _fmt_instrument_type,
+    "market_cap": _fmt_compact_amount,
+    "market_cap_eur": _fmt_compact_amount,
+    "trailing_pe": lambda v: _fmt_decimal(v, 2),
+    "forward_pe": lambda v: _fmt_decimal(v, 2),
+    "dividend_yield": _fmt_percent,
+    "profit_margins": _fmt_percent,
+    "return_on_equity": _fmt_percent,
+    "debt_to_equity": lambda v: _fmt_decimal(v, 2),
+    "free_cashflow": _fmt_compact_amount,
+    "free_cashflow_eur": _fmt_compact_amount,
+    "revenue_latest": _fmt_compact_amount,
+    "revenue_latest_eur": _fmt_compact_amount,
+    "fx_rate_to_eur": _fmt_fx_rate,
+    "revenue_growth_5y": _fmt_percent,
+    "has_annual_statements": _fmt_yes_no,
+    "has_quarterly_statements": _fmt_yes_no,
+    "sec_filing": _fmt_text,
+    "status": _fmt_status,
+    "website": _fmt_text,
+}
+
+
+def prepare_summary_for_display(df: pd.DataFrame) -> pd.DataFrame:
+    """Readable headers and formatted values for Numbers / Excel export."""
+    out = df.copy()
+    for col in SUMMARY_COLUMNS:
+        if col not in out.columns:
+            continue
+        formatter = _SUMMARY_FORMATTERS.get(col, _fmt_text)
+        out[col] = out[col].map(formatter)
+    out = out.rename(columns=SUMMARY_DISPLAY_NAMES)
+    return out[[SUMMARY_DISPLAY_NAMES[c] for c in SUMMARY_COLUMNS]]
 
 
 def _latest_income_statement_file(ticker: str) -> Path | None:
@@ -179,10 +343,16 @@ def build_summary_dataframe(results: list[TickerResult]) -> pd.DataFrame:
 def _save_summary_xlsx(
     summary_df: pd.DataFrame, portfolio_df: pd.DataFrame
 ) -> Path:
+    from portfolio_formulas import apply_portfolio_formulas_openpyxl
+
     path = OUTPUT_DIR / PORTFOLIO_SUMMARY_FILENAME
     with pd.ExcelWriter(path, engine="openpyxl") as writer:
         summary_df.to_excel(writer, index=False, sheet_name="summary")
         portfolio_df.to_excel(writer, index=False, sheet_name=PORTFOLIO_SHEET_NAME)
+        if not portfolio_df.empty:
+            apply_portfolio_formulas_openpyxl(
+                writer.sheets[PORTFOLIO_SHEET_NAME], len(portfolio_df)
+            )
     logger.info(
         "Wrote %s (summary: %d rows, %s: %d rows)",
         path,
@@ -216,7 +386,7 @@ def _save_summary_numbers(
 
 
 def save_summary(results: list[TickerResult]) -> Path:
-    summary_df = build_summary_dataframe(results)
+    summary_df = prepare_summary_for_display(build_summary_dataframe(results))
     portfolio_df = build_portfolio_dataframe()
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
