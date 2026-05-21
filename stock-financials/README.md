@@ -83,6 +83,8 @@ python main.py --cleanup   # remove old statements/ and sec/ subfolders
 
 Configure brokers in `.env` (see `.env.example`). On each `python main.py` run, live positions are merged into that sheet.
 
+**Cell formatting:** Values are written as real numbers and dates (not `1.2 B` abbreviations). Units in column headers drive formatting — e.g. `[local]` / `[EUR]` use thousands separators and 2 decimals, `[%]` uses percent style, `[UTC]` uses `yyyy-MM-dd HH:mm:ss`. See `numbers_format.py`.
+
 Set `PORTFOLIO_OUTPUT=numbers` (default), `xlsx`, or `both` in `.env`. Per-ticker statement files remain `.xlsx` (Yahoo/Excel-friendly); only the **portfolio summary** uses Numbers when `numbers` or `both` is set.
 
 ### What you need to provide

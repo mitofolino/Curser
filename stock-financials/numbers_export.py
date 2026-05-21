@@ -8,9 +8,9 @@ from pathlib import Path
 import pandas as pd
 
 from config import PORTFOLIO_DATA_START_ROW
+from numbers_format import apply_column_formats, coerce_cell_value, infer_column_format
 from portfolio_formulas import apply_portfolio_formulas_numbers
 from portfolio_positions import (
-    PORTFOLIO_COLUMNS,
     PORTFOLIO_DISPLAY_NAMES,
     PORTFOLIO_EXPORT_COLUMNS,
 )
@@ -22,31 +22,33 @@ PORTFOLIO_HEADER_ROW = 0
 PORTFOLIO_DATA_ROW_INDEX = PORTFOLIO_DATA_START_ROW - 1
 
 
-def _cell_value(value) -> str | int | float | bool:
-    if value is None or (isinstance(value, float) and pd.isna(value)):
-        return ""
-    if hasattr(value, "isoformat"):
-        return value.isoformat()
-    if hasattr(value, "item"):
-        try:
-            return value.item()
-        except (ValueError, AttributeError):
-            pass
-    if isinstance(value, (int, float, str, bool)):
-        return value
-    return str(value)
+def _write_cell(table, row: int, col: int, value) -> None:
+    if value is None or (isinstance(value, float) and pd.isna(value)) or value == "":
+        table.write(row, col, "")
+        return
+    table.write(row, col, value)
 
 
 def _write_dataframe(table, df: pd.DataFrame, *, data_start_row: int = 0) -> None:
     cols = list(df.columns)
+    header_row = 0 if data_start_row == 0 else data_start_row - 1
+    first_data_row = 1 if data_start_row == 0 else data_start_row
     if data_start_row == 0:
         for c, name in enumerate(cols):
-            table.write(0, c, name)
-        data_start_row = 1
+            table.write(header_row, c, name)
+    formats = [infer_column_format(str(h)) for h in cols]
     for r in range(len(df)):
-        out_row = data_start_row + r
+        out_row = first_data_row + r
         for c, name in enumerate(cols):
-            table.write(out_row, c, _cell_value(df.iloc[r][name]))
+            raw = df.iloc[r][name]
+            value = coerce_cell_value(raw, formats[c])
+            _write_cell(table, out_row, c, value)
+    apply_column_formats(
+        table,
+        df,
+        data_start_row=first_data_row,
+        num_rows=len(df),
+    )
 
 
 def _header_column_map(table, expected_columns: list[str]) -> dict[str, int]:
@@ -91,12 +93,21 @@ def _write_portfolio_table(table, df: pd.DataFrame) -> None:
 
     _clear_data_rows(table, PORTFOLIO_DATA_ROW_INDEX)
 
+    formats = {col: infer_column_format(col) for col in columns}
     for r in range(len(df)):
         out_row = PORTFOLIO_DATA_ROW_INDEX + r
         for col in columns:
             if col not in col_map:
                 continue
-            table.write(out_row, col_map[col], _cell_value(df.iloc[r][col]))
+            value = coerce_cell_value(df.iloc[r][col], formats[col])
+            _write_cell(table, out_row, col_map[col], value)
+    apply_column_formats(
+        table,
+        df,
+        data_start_row=PORTFOLIO_DATA_ROW_INDEX,
+        num_rows=len(df),
+        col_map=col_map,
+    )
 
 
 def _sheet_by_name(doc, name: str):

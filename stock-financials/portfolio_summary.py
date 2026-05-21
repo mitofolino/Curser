@@ -9,7 +9,12 @@ from typing import Any
 
 import pandas as pd
 
-from config import OUTPUT_DIR, PORTFOLIO_NUMBERS_PATH, PORTFOLIO_OUTPUT
+from config import (
+    OUTPUT_DIR,
+    PORTFOLIO_DATA_START_ROW,
+    PORTFOLIO_NUMBERS_PATH,
+    PORTFOLIO_OUTPUT,
+)
 from fx_rates import normalize_currency, prefetch_rates_to_eur, rate_to_eur, to_eur
 from layout import PORTFOLIO_SUMMARY_FILENAME, ticker_dir
 from config import PORTFOLIO_SHEET_NAME
@@ -222,14 +227,36 @@ _SUMMARY_FORMATTERS: dict[str, Any] = {
 
 
 def prepare_summary_for_display(df: pd.DataFrame) -> pd.DataFrame:
-    """Readable headers and formatted values for Numbers / Excel export."""
+    """Readable headers and typed values for Numbers / Excel export."""
+    from numbers_format import coerce_cell_value, infer_column_format
+
     out = df.copy()
-    for col in SUMMARY_COLUMNS:
-        if col not in out.columns:
-            continue
-        formatter = _SUMMARY_FORMATTERS.get(col, _fmt_text)
-        out[col] = out[col].map(formatter)
     out = out.rename(columns=SUMMARY_DISPLAY_NAMES)
+    text_cols = {
+        "ticker",
+        "company",
+        "country",
+        "currency",
+        "sector",
+        "industry",
+        "yahoo_symbol",
+        "instrument_type",
+        "has_annual_statements",
+        "has_quarterly_statements",
+        "sec_filing",
+        "status",
+        "website",
+    }
+    for col in SUMMARY_COLUMNS:
+        display = SUMMARY_DISPLAY_NAMES[col]
+        if display not in out.columns:
+            continue
+        if col in text_cols:
+            formatter = _SUMMARY_FORMATTERS.get(col, _fmt_text)
+            out[display] = out[display].map(formatter)
+        else:
+            fmt = infer_column_format(display)
+            out[display] = out[display].map(lambda v, f=fmt: coerce_cell_value(v, f))
     return out[[SUMMARY_DISPLAY_NAMES[c] for c in SUMMARY_COLUMNS]]
 
 
@@ -343,16 +370,22 @@ def build_summary_dataframe(results: list[TickerResult]) -> pd.DataFrame:
 def _save_summary_xlsx(
     summary_df: pd.DataFrame, portfolio_df: pd.DataFrame
 ) -> Path:
+    from excel_format import apply_sheet_formats
     from portfolio_formulas import apply_portfolio_formulas_openpyxl
 
     path = OUTPUT_DIR / PORTFOLIO_SUMMARY_FILENAME
     with pd.ExcelWriter(path, engine="openpyxl") as writer:
         summary_df.to_excel(writer, index=False, sheet_name="summary")
         portfolio_df.to_excel(writer, index=False, sheet_name=PORTFOLIO_SHEET_NAME)
+        apply_sheet_formats(writer.sheets["summary"], data_start_row=2)
         if not portfolio_df.empty:
             apply_portfolio_formulas_openpyxl(
                 writer.sheets[PORTFOLIO_SHEET_NAME], len(portfolio_df)
             )
+        apply_sheet_formats(
+            writer.sheets[PORTFOLIO_SHEET_NAME],
+            data_start_row=PORTFOLIO_DATA_START_ROW,
+        )
     logger.info(
         "Wrote %s (summary: %d rows, %s: %d rows)",
         path,

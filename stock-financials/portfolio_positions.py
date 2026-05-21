@@ -53,6 +53,8 @@ PORTFOLIO_EXPORT_COLUMNS = [
     PORTFOLIO_DISPLAY_NAMES[c] for c in PORTFOLIO_COLUMNS
 ]
 
+_DISPLAY_TO_INTERNAL = {v: k for k, v in PORTFOLIO_DISPLAY_NAMES.items()}
+
 
 def _is_blank(value: Any) -> bool:
     if value is None:
@@ -209,16 +211,25 @@ _PORTFOLIO_FORMATTERS: dict[str, Any] = {
 
 
 def prepare_portfolio_for_display(df: pd.DataFrame) -> pd.DataFrame:
-    """Readable headers and formatted values for Numbers / Excel export."""
+    """Readable headers and typed values for Numbers / Excel export."""
+    from numbers_format import coerce_cell_value, infer_column_format
+
     if df.empty:
         return pd.DataFrame(columns=PORTFOLIO_EXPORT_COLUMNS)
     out = _align_template_columns(df).copy()
-    for col in PORTFOLIO_COLUMNS:
+    out = out.rename(columns=PORTFOLIO_DISPLAY_NAMES)
+    for col in PORTFOLIO_EXPORT_COLUMNS:
         if col not in out.columns:
             continue
-        formatter = _PORTFOLIO_FORMATTERS.get(col, _fmt_text)
-        out[col] = out[col].map(formatter)
-    out = out.rename(columns=PORTFOLIO_DISPLAY_NAMES)
+        fmt = infer_column_format(col)
+        if fmt.kind == "text":
+            formatter = _PORTFOLIO_FORMATTERS.get(
+                _DISPLAY_TO_INTERNAL.get(col, col),
+                _fmt_text,
+            )
+            out[col] = out[col].map(formatter)
+        else:
+            out[col] = out[col].map(lambda v, f=fmt: coerce_cell_value(v, f))
     return out[PORTFOLIO_EXPORT_COLUMNS]
 
 
