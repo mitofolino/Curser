@@ -30,10 +30,20 @@ def fetch_last_prices(tickers: list[str]) -> dict[str, float | None]:
         key = str(raw).strip().upper()
         if not key or key in out:
             continue
+        tried: list[str] = []
         price = None
         for symbol in yahoo_symbol_candidates(key):
+            tried.append(symbol)
             price = _last_close(symbol)
             if price is not None:
+                if symbol != key:
+                    logger.debug("Price for %s via Yahoo symbol %s", key, symbol)
                 break
+        if price is None and tried:
+            logger.warning(
+                "No Yahoo price for %s (tried: %s)",
+                key,
+                ", ".join(tried),
+            )
         out[key] = price
     return out

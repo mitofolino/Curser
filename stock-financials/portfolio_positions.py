@@ -29,6 +29,7 @@ PORTFOLIO_COLUMNS = [
     "Investment EUR",
     "Update Date",
     "Price",
+    "Value",
 ]
 
 # Human-readable headers for Numbers / Excel (units in square brackets)
@@ -46,10 +47,11 @@ PORTFOLIO_DISPLAY_NAMES: dict[str, str] = {
     "Investment EUR": "Investment [EUR]",
     "Update Date": "Update Date [UTC]",
     "Price": "Price [local]",
+    "Value": "Value [local]",
 }
 
 # Filled by Numbers/Excel formulas on export (see portfolio_formulas.py)
-PORTFOLIO_FORMULA_COLUMNS = frozenset({"Investment", "Investment EUR"})
+PORTFOLIO_FORMULA_COLUMNS = frozenset({"Investment", "Investment EUR", "Value"})
 
 PORTFOLIO_EXPORT_COLUMNS = [
     PORTFOLIO_DISPLAY_NAMES[c] for c in PORTFOLIO_COLUMNS
@@ -218,6 +220,7 @@ _PORTFOLIO_FORMATTERS: dict[str, Any] = {
     "Investment EUR": _fmt_price,
     "Update Date": _fmt_open_date,
     "Price": _fmt_price,
+    "Value": _fmt_investment_placeholder,
 }
 
 

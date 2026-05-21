@@ -22,6 +22,9 @@ NON_US_SUFFIX = re.compile(
     re.IGNORECASE,
 )
 
+# eToro / broker listing tags — not valid Yahoo symbols (use bare ticker instead)
+_BROKER_LISTING_SUFFIX = re.compile(r"\.(US|UK|LON)$", re.IGNORECASE)
+
 FMP_STATEMENTS = {
     "income_statement": "income-statement",
     "balance_sheet": "balance-sheet-statement",
@@ -33,15 +36,34 @@ def is_non_us_ticker(ticker: str) -> bool:
     return bool(NON_US_SUFFIX.search(ticker))
 
 
+def strip_broker_listing_suffix(ticker: str) -> str | None:
+    """e.g. T.US → T, MDT.US → MDT (Yahoo uses bare US symbols)."""
+    upper = ticker.upper().strip()
+    bare = _BROKER_LISTING_SUFFIX.sub("", upper)
+    return bare if bare and bare != upper else None
+
+
 def yahoo_symbol_candidates(ticker: str) -> list[str]:
     """Order of Yahoo symbols to try (sheet ticker first, then mapped listing)."""
-    upper = ticker.upper()
+    upper = ticker.upper().strip()
     candidates: list[str] = []
-    for sym in (upper, YAHOO_ALIASES.get(upper)):
+
+    def add(sym: str | None) -> None:
         if sym and sym not in candidates:
             candidates.append(sym)
+
+    bare = strip_broker_listing_suffix(upper)
+    if bare:
+        add(bare)
+    add(upper)
+
+    alias = YAHOO_ALIASES.get(upper) or (bare and YAHOO_ALIASES.get(bare))
+    if alias:
+        add(alias)
+
     if is_non_us_ticker(upper):
         return candidates
+
     # Bare tickers: also try common home listings for known names
     extra = {
         "AZN": "AZN.L",
@@ -49,9 +71,12 @@ def yahoo_symbol_candidates(ticker: str) -> list[str]:
         "SAP": "SAP.DE",
         "NVO": "NVO",
     }
-    alt = extra.get(upper)
-    if alt and alt not in candidates:
-        candidates.append(alt)
+    for key in (upper, bare):
+        if not key:
+            continue
+        alt = extra.get(key)
+        if alt:
+            add(alt)
     return candidates
 
 

@@ -19,6 +19,8 @@ COL_TOTAL_FEES = PORTFOLIO_EXPORT_COLUMNS.index("Total Fees [local]")
 COL_INVESTMENT = PORTFOLIO_EXPORT_COLUMNS.index("Investment [local]")
 COL_OPEN_FX = PORTFOLIO_EXPORT_COLUMNS.index("Open Exchange Rate [EUR→local]")
 COL_INVESTMENT_EUR = PORTFOLIO_EXPORT_COLUMNS.index("Investment [EUR]")
+COL_PRICE = PORTFOLIO_EXPORT_COLUMNS.index("Price [local]")
+COL_VALUE = PORTFOLIO_EXPORT_COLUMNS.index("Value [local]")
 
 
 def _excel_row(zero_based_row: int) -> int:
@@ -39,8 +41,14 @@ def investment_eur_formula(zero_based_row: int) -> str:
     return f"={inv}/{fx}"
 
 
+def value_formula(zero_based_row: int) -> str:
+    shares = xl_rowcol_to_cell(zero_based_row, COL_SHARES)
+    price = xl_rowcol_to_cell(zero_based_row, COL_PRICE)
+    return f"={shares}*{price}"
+
+
 def apply_portfolio_formulas_openpyxl(ws, num_data_rows: int) -> None:
-    """Write Excel formulas for Investment and Investment [EUR] columns."""
+    """Write Excel formulas for Investment, Investment [EUR], and Value [local]."""
     start = PORTFOLIO_DATA_START_ROW
     for i in range(num_data_rows):
         row_idx = start + i
@@ -51,6 +59,7 @@ def apply_portfolio_formulas_openpyxl(ws, num_data_rows: int) -> None:
             column=COL_INVESTMENT_EUR + 1,
             value=investment_eur_formula(zero_row),
         )
+        ws.cell(row=row_idx, column=COL_VALUE + 1, value=value_formula(zero_row))
 
 
 def apply_portfolio_formulas_numbers(
@@ -71,6 +80,7 @@ def apply_portfolio_formulas_numbers(
     end_row = start_row + num_data_rows - 1
     inv_col = COL_INVESTMENT + 1
     eur_col = COL_INVESTMENT_EUR + 1
+    value_col = COL_VALUE + 1
 
     lines = [
         'tell application "Numbers"',
@@ -82,10 +92,16 @@ def apply_portfolio_formulas_numbers(
     ]
     for row in range(start_row, end_row + 1):
         zero_row = row - 1
-        inv_formula = investment_formula(zero_row).replace('"', '\\"')
-        eur_formula = investment_eur_formula(zero_row).replace('"', '\\"')
-        lines.append(f'        set value of cell {inv_col} of row {row} to "{inv_formula}"')
-        lines.append(f'        set value of cell {eur_col} of row {row} to "{eur_formula}"')
+        formulas = (
+            (inv_col, investment_formula(zero_row)),
+            (eur_col, investment_eur_formula(zero_row)),
+            (value_col, value_formula(zero_row)),
+        )
+        for col, formula in formulas:
+            escaped = formula.replace('"', '\\"')
+            lines.append(
+                f'        set value of cell {col} of row {row} to "{escaped}"'
+            )
     lines += [
         "      end tell",
         "    end tell",

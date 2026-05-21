@@ -26,8 +26,9 @@ logger = logging.getLogger(__name__)
 PORTFOLIO_HEADER_ROW = 0
 PORTFOLIO_DATA_ROW_INDEX = PORTFOLIO_DATA_START_ROW - 1
 
-# Column M (0-based 12): current price after Update Date
+# Column M / N (0-based): Price after Update Date, Value = Shares × Price
 PORTFOLIO_PRICE_COL = 12
+PORTFOLIO_VALUE_COL = 13
 
 
 def _write_cell(table, row: int, col: int, value) -> None:
@@ -70,6 +71,7 @@ def _header_column_map(table, expected_columns: list[str]) -> dict[str, int]:
     aliases["broker"] = PORTFOLIO_DISPLAY_NAMES["Source"]
     aliases["price"] = PORTFOLIO_DISPLAY_NAMES["Price"]
     aliases["prices"] = PORTFOLIO_DISPLAY_NAMES["Price"]
+    aliases["value"] = PORTFOLIO_DISPLAY_NAMES["Value"]
 
     mapping: dict[str, int] = {}
     for c in range(table.num_cols):
