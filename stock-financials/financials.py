@@ -67,27 +67,42 @@ FUND_QUOTE_TYPES = frozenset({"ETF", "MUTUALFUND"})
 NON_FUND_QUOTE_TYPES = frozenset(
     {"EQUITY", "INDEX", "CURRENCY", "CRYPTOCURRENCY", "FUTURE", "OPTION", "WARRANT"}
 )
+FUND_METADATA_FIELDS = (
+    "expenseRatio",
+    "fundFamily",
+    "category",
+    "totalAssets",
+    "fundInceptionDate",
+)
+
+
+def _normalize_quote_type(info: dict) -> str:
+    return str(info.get("quoteType") or "").strip().upper()
+
+
+def _is_etf_or_fund(info: dict) -> bool:
+    """True only for ETFs/mutual funds — never for stocks that merely have a name."""
+    quote_type = _normalize_quote_type(info)
+    if quote_type in NON_FUND_QUOTE_TYPES:
+        return False
+    if quote_type in FUND_QUOTE_TYPES:
+        return True
+    if quote_type:
+        return False
+    return any(info.get(field) is not None for field in FUND_METADATA_FIELDS)
 
 
 def _export_etf_workbook(ticker: str, info: dict, out_dir: Path) -> Path | None:
-    if not info:
-        return None
-    quote_type = info.get("quoteType")
-    if quote_type in NON_FUND_QUOTE_TYPES:
-        return None
-    if quote_type in FUND_QUOTE_TYPES:
-        pass
-    elif quote_type is not None:
-        return None
-    elif not info.get("longName") and not info.get("shortName"):
+    if not info or not _is_etf_or_fund(info):
         return None
     rows = [(k, info.get(k)) for k in ETF_INFO_FIELDS if info.get(k) is not None]
     if not rows:
         return None
     out_dir.mkdir(parents=True, exist_ok=True)
-    name = (info.get("longName") or info.get("shortName") or ticker).strip()
-    safe_name = "".join(c if c.isalnum() or c in " -_" else "_" for c in name)[:60]
     path = out_dir / etf_overview_filename(ticker)
+    if path.exists():
+        logger.info("%s: skip existing %s", ticker, path.name)
+        return None
     pd.DataFrame(rows, columns=["field", "value"]).to_excel(path, index=False)
     logger.info("%s: wrote ETF overview %s", ticker, path)
     return path
@@ -110,10 +125,13 @@ def _export_statement_files(
             )
             continue
         for period in periods:
-            col_df = df[[period]].copy()
-            col_df.index.name = "line_item"
             fname = statement_filename(ticker, period, statement_type)
             path = out_dir / fname
+            if path.exists():
+                logger.info("%s: skip existing %s", ticker, fname)
+                continue
+            col_df = df[[period]].copy()
+            col_df.index.name = "line_item"
             col_df.to_excel(path)
             written.append(path)
             logger.info("%s: wrote %s", ticker, fname)
@@ -125,9 +143,13 @@ def _export_overview_file(ticker: str, overview: dict) -> Path:
     if out_dir is None:
         raise ValueError("overview missing _out_dir")
     path = Path(out_dir) / overview_filename(ticker)
+    if path.exists():
+        logger.info("%s: skip existing %s", ticker, path.name)
+        return None
     rows = [{"field": k, "value": v} for k, v in overview.items() if not k.startswith("_")]
     rows.insert(0, {"field": "ticker", "value": ticker})
     pd.DataFrame(rows).to_excel(path, index=False)
+    logger.info("%s: wrote %s", ticker, path.name)
     return path
 
 
@@ -238,17 +260,19 @@ def download_statements(
 
     if not sheets:
         etf_path = _export_etf_workbook(ticker, info, out_dir)
-        if etf_path:
+        if etf_path or any(out_dir.glob(f"{ticker}_*_etf_overview.xlsx")):
             meta = _overview_dict(ticker, info, yahoo_used, {})
             meta["quote_type"] = info.get("quoteType")
-            return [etf_path], meta, "etf"
+            return ([etf_path] if etf_path else []), meta, "etf"
         logger.error("%s: no financial statement data from Yahoo Finance", ticker)
         return [], {}, "unknown"
 
     overview = _overview_dict(ticker, info, yahoo_used, sheets)
     overview["_out_dir"] = str(out_dir)
     paths = _export_statement_files(ticker, sheets, out_dir)
-    paths.append(_export_overview_file(ticker, overview))
+    overview_path = _export_overview_file(ticker, overview)
+    if overview_path:
+        paths.append(overview_path)
     return paths, overview, "stock"
 
 

@@ -24,7 +24,9 @@ Stocks_Analyses/
 ```
 
 **Naming:** `{ticker}_{period_date}_{statement_type}.xlsx` (one period per file).  
-Only periods within the **last 2 years** are exported (`STATEMENT_YEARS` in `.env`).
+Only periods within the **last N years** are exported (`STATEMENT_YEARS` in `.env`, default 5).
+
+**Incremental runs:** existing statement and SEC files are never overwritten; only missing periods/files are added.
 
 ## What gets downloaded (per ticker)
 
@@ -35,7 +37,7 @@ Only periods within the **last 2 years** are exported (`STATEMENT_YEARS` in `.en
 | `{TICKER}_{date}_cash_flow_*.xlsx` | Yahoo Finance | Cash flow |
 | `{TICKER}_{date}_company_overview.xlsx` | Yahoo Finance | Key metrics |
 | `{TICKER}_{date}_etf_overview.xlsx` | Yahoo Finance | ETFs only |
-| `{TICKER}_{date}_10_K_*.html` / `20_F_*` | SEC EDGAR | Last 2 annual filings (stocks) |
+| `{TICKER}_{date}_10_K_*.html` / `20_F_*` | SEC EDGAR | Last N annual filings (`SEC_FILINGS_LIMIT`, default = `STATEMENT_YEARS`) |
 | **`portfolio_summary.xlsx`** | Generated | All tickers; amounts in local currency **and EUR** |
 
 ### Non-US / global companies

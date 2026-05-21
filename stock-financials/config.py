@@ -19,8 +19,8 @@ DATA_START_ROW = int(os.getenv("DATA_START_ROW", "1"))
 STOCKS_SHEET = os.getenv("STOCKS_SHEET", "").strip() or None
 
 DOWNLOAD_10K = os.getenv("DOWNLOAD_10K", "true").lower() in ("1", "true", "yes")
-SEC_FILINGS_LIMIT = int(os.getenv("SEC_FILINGS_LIMIT", "2"))
-STATEMENT_YEARS = int(os.getenv("STATEMENT_YEARS", "2"))
+STATEMENT_YEARS = int(os.getenv("STATEMENT_YEARS", "5"))
+SEC_FILINGS_LIMIT = int(os.getenv("SEC_FILINGS_LIMIT", str(STATEMENT_YEARS)))
 SEC_EMAIL = os.getenv("SEC_EMAIL", "your.email@example.com")
 DOWNLOAD_QUARTERLY = os.getenv("DOWNLOAD_QUARTERLY", "true").lower() in (
     "1",

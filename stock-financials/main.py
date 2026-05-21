@@ -29,6 +29,34 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+def _ticker_has_exports(dest: Path) -> bool:
+    return dest.is_dir() and any(dest.iterdir())
+
+
+def _sec_primary_filings(dest: Path, ticker: str) -> list[Path]:
+    return [
+        p
+        for p in dest.iterdir()
+        if p.is_file()
+        and p.name.startswith(f"{ticker}_")
+        and "primary" in p.name.lower()
+        and ("_10_K_" in p.name or "_20_F_" in p.name)
+    ]
+
+
+def _sec_filings_complete(dest: Path, ticker: str, limit: int) -> bool:
+    return len(_sec_primary_filings(dest, ticker)) >= limit
+
+
+def _sec_form_on_disk(dest: Path, ticker: str) -> str | None:
+    names = [p.name for p in _sec_primary_filings(dest, ticker)]
+    if any("_20_F_" in n for n in names):
+        return "20-F"
+    if any("_10_K_" in n for n in names):
+        return "10-K"
+    return None
+
+
 def _accession_from_path(path: Path, form: str) -> str:
     parts = path.parts
     if form in parts:
@@ -50,7 +78,8 @@ def _prepare_sec_files(
         name = sec_filename(ticker, accession, form, src.name)
         dest = dest_dir / name
         if dest.exists():
-            dest.unlink()
+            logger.info("%s: skip existing %s", ticker, name)
+            continue
         shutil.copy2(src, dest)
         prepared.append(dest)
         logger.info("%s: prepared %s", ticker, name)
@@ -63,27 +92,39 @@ def process_ticker(ticker: str, *, output_root: Path) -> TickerResult:
     dest.mkdir(parents=True, exist_ok=True)
 
     paths, overview, instrument = download_statements(ticker, dest)
-    if paths:
-        result.ok = True
+    if overview:
         result.overview = overview
         result.instrument_type = instrument
         result.has_quarterly = bool(overview.get("has_quarterly"))
+    if paths:
         result.files_exported = len(paths)
+    if paths or _ticker_has_exports(dest):
+        result.ok = True
 
-    if DOWNLOAD_10K and paths and instrument == "stock":
-        sec_tmp = dest / ".sec_tmp"
-        if sec_tmp.exists():
-            shutil.rmtree(sec_tmp)
-        sec_tmp.mkdir(parents=True, exist_ok=True)
-        raw_paths, form = download_sec_annual_filings(ticker, sec_tmp, SEC_FILINGS_LIMIT)
-        if raw_paths and form:
-            sec_files = _prepare_sec_files(ticker, form, raw_paths, dest)
-            shutil.rmtree(sec_tmp, ignore_errors=True)
-            result.ok = True
-            result.sec_form = form
-            result.files_exported += len(sec_files)
+    if DOWNLOAD_10K and instrument == "stock":
+        if _sec_filings_complete(dest, ticker, SEC_FILINGS_LIMIT):
+            result.sec_form = _sec_form_on_disk(dest, ticker)
+            logger.info(
+                "%s: SEC filings already present (%d), skipping download",
+                ticker,
+                len(_sec_primary_filings(dest, ticker)),
+            )
         else:
-            shutil.rmtree(sec_tmp, ignore_errors=True)
+            sec_tmp = dest / ".sec_tmp"
+            if sec_tmp.exists():
+                shutil.rmtree(sec_tmp)
+            sec_tmp.mkdir(parents=True, exist_ok=True)
+            raw_paths, form = download_sec_annual_filings(
+                ticker, sec_tmp, SEC_FILINGS_LIMIT
+            )
+            if raw_paths and form:
+                sec_files = _prepare_sec_files(ticker, form, raw_paths, dest)
+                shutil.rmtree(sec_tmp, ignore_errors=True)
+                result.ok = True
+                result.sec_form = form
+                result.files_exported += len(sec_files)
+            else:
+                shutil.rmtree(sec_tmp, ignore_errors=True)
 
     return result
 
