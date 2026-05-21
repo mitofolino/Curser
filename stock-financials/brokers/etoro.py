@@ -246,6 +246,24 @@ def _instrument_map(instrument_ids: set[int]) -> dict[int, dict[str, Any]]:
     return {iid: mapping[iid] for iid in instrument_ids if iid in mapping}
 
 
+def _position_total_fees(pos: dict) -> float:
+    """
+    eToro ``totalFees`` is already in account currency (0 or negative).
+
+    ``totalExternalFees`` is not a dollar amount (often 1.0 / 2.0 as a flag);
+    adding it was turning fees positive. ``totalExternalTaxes`` is separate.
+    """
+    fees = float(pos.get("totalFees") or 0)
+    taxes = pos.get("totalExternalTaxes")
+    if taxes is not None:
+        t = float(taxes)
+        if t < 0:
+            fees += t
+        elif t > 0:
+            fees -= t
+    return fees
+
+
 def _positions_from_portfolio_payload(payload: dict) -> list[dict]:
     client = payload.get("clientPortfolio") or payload.get("ClientPortfolio") or {}
     return client.get("positions") or client.get("Positions") or []
@@ -278,9 +296,6 @@ def _from_api() -> list[dict[str, Any]]:
         if not str(ticker).strip():
             continue
 
-        fees = pos.get("totalFees") or 0
-        fees = float(fees) + float(pos.get("totalExternalFees") or 0)
-
         rows.append(
             _row(
                 ticker=str(ticker),
@@ -292,7 +307,7 @@ def _from_api() -> list[dict[str, Any]]:
                 or pos.get("initialUnits"),
                 open_date=pos.get("openDateTime") or pos.get("openDate"),
                 buy_price=pos.get("openRate") or pos.get("buyPrice"),
-                total_fees=fees,
+                total_fees=_position_total_fees(pos),
             )
         )
     return rows
