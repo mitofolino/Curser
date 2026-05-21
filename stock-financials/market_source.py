@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from typing import Any
 
 # Yahoo-style suffix → common exchange name
 _TICKER_SUFFIX_EXCHANGE: dict[str, str] = {
@@ -81,6 +82,27 @@ EXCHANGE_CURRENCY: dict[str, str] = {
     "VSE": "EUR",
     "BCS": "CLP",
 }
+
+# eToro / LSE report GBP instrument prices in pence (100 pence = £1)
+GBP_PENCE_PER_POUND = 100
+
+
+def normalize_local_buy_price(price: Any, currency: str | None) -> Any:
+    """
+    Convert broker buy/open rates from pence to pounds when currency is GBP.
+
+    eToro ``openRate`` for LSE (and similar) is in pence; portfolio [local]
+    columns and investment math use pounds.
+    """
+    if price is None or price == "":
+        return price
+    cur = _normalize_currency_code(currency)
+    if cur != "GBP":
+        return price
+    try:
+        return float(price) / GBP_PENCE_PER_POUND
+    except (TypeError, ValueError):
+        return price
 
 
 def normalize_market_source(value: str | None) -> str | None:

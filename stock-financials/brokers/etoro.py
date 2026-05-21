@@ -25,6 +25,7 @@ from config import (
 from market_source import (
     currency_for_market_source,
     exchange_from_ticker,
+    normalize_local_buy_price,
     normalize_market_source,
 )
 
@@ -85,7 +86,7 @@ def _row(
         "Currency": resolved_currency,
         "Shares": shares,
         "Open Date": _parse_open_datetime(open_date),
-        "Buy Price": buy_price,
+        "Buy Price": normalize_local_buy_price(buy_price, resolved_currency),
         "Total Fees": total_fees,
     }
 
