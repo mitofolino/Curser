@@ -64,6 +64,18 @@ def _parse_open_datetime(value: Any) -> str | None:
     return text
 
 
+def _extract_position_id(pos: dict) -> str | None:
+    """eToro open-position identifier (positionID / positionId)."""
+    for key in ("positionID", "positionId", "PositionID"):
+        val = pos.get(key)
+        if val is None or not str(val).strip():
+            continue
+        if isinstance(val, float) and val == int(val):
+            return str(int(val))
+        return str(val).strip()
+    return None
+
+
 def _row(
     *,
     ticker: str,
@@ -74,6 +86,8 @@ def _row(
     open_date: Any,
     buy_price: Any,
     total_fees: Any,
+    used_platform: str | None = None,
+    position_id: str | None = None,
 ) -> dict[str, Any]:
     market = normalize_market_source(source) or exchange_from_ticker(ticker)
     resolved_currency = currency_for_market_source(
@@ -92,6 +106,8 @@ def _row(
         "Total Fees": normalize_gbp_pence_to_pounds(
             total_fees, resolved_currency, in_pence=True
         ),
+        "Used Platform": used_platform,
+        "Position ID": position_id,
     }
 
 
@@ -313,6 +329,8 @@ def _from_api() -> list[dict[str, Any]]:
                 open_date=pos.get("openDateTime") or pos.get("openDate"),
                 buy_price=pos.get("openRate") or pos.get("buyPrice"),
                 total_fees=_position_total_fees(pos),
+                used_platform="eToro",
+                position_id=_extract_position_id(pos),
             )
         )
     return rows
@@ -354,6 +372,15 @@ def _from_csv(path: Path) -> list[dict[str, Any]]:
                     total_fees=raw.get("Total Fees")
                     or raw.get("Fees")
                     or raw.get("Commission"),
+                    used_platform=raw.get("Used Platform")
+                    or raw.get("Platform")
+                    or "eToro",
+                    position_id=(
+                        raw.get("Position ID")
+                        or raw.get("PositionID")
+                        or raw.get("positionId")
+                        or raw.get("positionID")
+                    ),
                 )
             )
     return rows

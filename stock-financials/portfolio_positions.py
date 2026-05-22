@@ -38,6 +38,9 @@ PORTFOLIO_COLUMNS = [
     "Value EUR",
     "Total Return",
     "Stock Return",
+    "Fee Influence",
+    "Used Platform",
+    "Position ID",
 ]
 
 # Human-readable headers for Numbers / Excel (units in square brackets)
@@ -60,6 +63,9 @@ PORTFOLIO_DISPLAY_NAMES: dict[str, str] = {
     "Value EUR": "Value [EUR]",
     "Total Return": "Total Return [EUR]",
     "Stock Return": "Stock Return [EUR]",
+    "Fee Influence": "Fee Influence [EUR]",
+    "Used Platform": "Used Platform",
+    "Position ID": "Position ID",
 }
 
 # Filled by Numbers/Excel formulas on export (see portfolio_formulas.py)
@@ -71,6 +77,7 @@ PORTFOLIO_FORMULA_COLUMNS = frozenset(
         "Value EUR",
         "Total Return",
         "Stock Return",
+        "Fee Influence",
     }
 )
 
@@ -104,6 +111,13 @@ PORTFOLIO_LEGACY_HEADER_ALIASES: dict[str, str] = {
     "stock return": "Stock Return",
     "stock return [eur]": "Stock Return",
     "stock return (eur)": "Stock Return",
+    "fee influence": "Fee Influence",
+    "fee influence [eur]": "Fee Influence",
+    "fee influence (eur)": "Fee Influence",
+    "used platform": "Used Platform",
+    "platform": "Used Platform",
+    "position id": "Position ID",
+    "positionid": "Position ID",
 }
 
 
@@ -127,6 +141,12 @@ def canonical_portfolio_header(label: str) -> str | None:
         return PORTFOLIO_DISPLAY_NAMES["Total Return"]
     if key in ("stock return", "stock return [eur]", "stock return (eur)"):
         return PORTFOLIO_DISPLAY_NAMES["Stock Return"]
+    if key in ("fee influence", "fee influence [eur]", "fee influence (eur)"):
+        return PORTFOLIO_DISPLAY_NAMES["Fee Influence"]
+    if key in ("used platform", "platform"):
+        return PORTFOLIO_DISPLAY_NAMES["Used Platform"]
+    if key in ("position id", "positionid"):
+        return PORTFOLIO_DISPLAY_NAMES["Position ID"]
     for internal, display in PORTFOLIO_DISPLAY_NAMES.items():
         d = display.lower()
         if key == d or key.startswith(d.split("[")[0].strip().lower()):
@@ -216,6 +236,26 @@ def _fmt_fx_rate(value: Any) -> str:
 def _fmt_investment_placeholder(value: Any) -> str:
     """Formula columns: leave empty for Numbers/Excel to fill."""
     return ""
+
+
+def _fmt_platform(value: Any) -> str:
+    text = _fmt_text(value)
+    if not text:
+        return ""
+    lower = text.lower()
+    if lower in ("etoro", "e-toro"):
+        return "eToro"
+    if lower == "ibkr":
+        return "IBKR"
+    return text
+
+
+def _fmt_position_id(value: Any) -> str:
+    if _is_blank(value):
+        return ""
+    if isinstance(value, float) and value == int(value):
+        return str(int(value))
+    return str(value).strip()
 
 
 def _to_float(value: Any) -> float | None:
@@ -313,6 +353,9 @@ _PORTFOLIO_FORMATTERS: dict[str, Any] = {
     "Value EUR": _fmt_investment_placeholder,
     "Total Return": _fmt_investment_placeholder,
     "Stock Return": _fmt_investment_placeholder,
+    "Fee Influence": _fmt_investment_placeholder,
+    "Used Platform": _fmt_platform,
+    "Position ID": _fmt_position_id,
 }
 
 
@@ -445,6 +488,9 @@ def fetch_all_positions() -> pd.DataFrame:
     ):
         try:
             batch = fetcher()
+            for row in batch:
+                if not row.get("Used Platform"):
+                    row["Used Platform"] = label
             rows.extend(batch)
             logger.info("%s: %d position(s)", label, len(batch))
         except Exception as e:

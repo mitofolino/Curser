@@ -37,6 +37,9 @@ PORTFOLIO_EXCHANGE_RATE_COL = 14  # column O — current EUR→local
 PORTFOLIO_VALUE_EUR_COL = 15  # column P — Value [EUR] = N / O
 PORTFOLIO_TOTAL_RETURN_COL = 16  # column Q — Total Return [EUR] = P − K
 PORTFOLIO_STOCK_RETURN_COL = 17  # column R — Stock Return [EUR]
+PORTFOLIO_FEE_INFLUENCE_COL = 18  # column S — Fee Influence [EUR] = H / J
+PORTFOLIO_USED_PLATFORM_COL = 19  # column T
+PORTFOLIO_POSITION_ID_COL = 20  # column U
 
 
 def _write_cell(table, row: int, col: int, value) -> None:
@@ -85,6 +88,10 @@ def _header_column_map(table, expected_columns: list[str]) -> dict[str, int]:
     aliases["value (eur)"] = PORTFOLIO_DISPLAY_NAMES["Value EUR"]
     aliases["total return"] = PORTFOLIO_DISPLAY_NAMES["Total Return"]
     aliases["stock return"] = PORTFOLIO_DISPLAY_NAMES["Stock Return"]
+    aliases["fee influence"] = PORTFOLIO_DISPLAY_NAMES["Fee Influence"]
+    aliases["used platform"] = PORTFOLIO_DISPLAY_NAMES["Used Platform"]
+    aliases["platform"] = PORTFOLIO_DISPLAY_NAMES["Used Platform"]
+    aliases["position id"] = PORTFOLIO_DISPLAY_NAMES["Position ID"]
 
     mapping: dict[str, int] = {}
     for c in range(table.num_cols):
@@ -170,6 +177,7 @@ def apply_portfolio_column_formats_numbers(
     val_eur = PORTFOLIO_DISPLAY_NAMES["Value EUR"]
     total_return = PORTFOLIO_DISPLAY_NAMES["Total Return"]
     stock_return = PORTFOLIO_DISPLAY_NAMES["Stock Return"]
+    fee_influence = PORTFOLIO_DISPLAY_NAMES["Fee Influence"]
     if inv_eur in col_map:
         apply_eur_currency_column_format(
             table,
@@ -177,7 +185,7 @@ def apply_portfolio_column_formats_numbers(
             data_start_row=PORTFOLIO_DATA_ROW_INDEX,
             num_rows=num_rows,
         )
-    for target_header in (val_eur, total_return, stock_return):
+    for target_header in (val_eur, total_return, stock_return, fee_influence):
         if inv_eur not in col_map or target_header not in col_map:
             continue
         if not copy_column_format_from_reference(

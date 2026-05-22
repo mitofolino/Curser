@@ -25,6 +25,7 @@ COL_EXCHANGE_RATE = PORTFOLIO_EXPORT_COLUMNS.index("Exchange Rate [EUR→local]"
 COL_VALUE_EUR = PORTFOLIO_EXPORT_COLUMNS.index("Value [EUR]")
 COL_TOTAL_RETURN = PORTFOLIO_EXPORT_COLUMNS.index("Total Return [EUR]")
 COL_STOCK_RETURN = PORTFOLIO_EXPORT_COLUMNS.index("Stock Return [EUR]")
+COL_FEE_INFLUENCE = PORTFOLIO_EXPORT_COLUMNS.index("Fee Influence [EUR]")
 
 
 def investment_formula(zero_based_row: int) -> str:
@@ -66,6 +67,12 @@ def stock_return_formula(zero_based_row: int) -> str:
     return f"={value_eur}-({shares}*{buy_price}/{open_fx})"
 
 
+def fee_influence_formula(zero_based_row: int) -> str:
+    fees = xl_rowcol_to_cell(zero_based_row, COL_TOTAL_FEES)
+    open_fx = xl_rowcol_to_cell(zero_based_row, COL_OPEN_FX)
+    return f"={fees}/{open_fx}"
+
+
 def apply_portfolio_formulas_openpyxl(ws, num_data_rows: int) -> None:
     """Write Excel formulas for computed portfolio columns."""
     start = PORTFOLIO_DATA_START_ROW
@@ -90,6 +97,11 @@ def apply_portfolio_formulas_openpyxl(ws, num_data_rows: int) -> None:
             column=COL_STOCK_RETURN + 1,
             value=stock_return_formula(zero_row),
         )
+        ws.cell(
+            row=row_idx,
+            column=COL_FEE_INFLUENCE + 1,
+            value=fee_influence_formula(zero_row),
+        )
 
 
 def apply_portfolio_formulas_numbers(
@@ -111,6 +123,7 @@ def apply_portfolio_formulas_numbers(
     value_eur_col = COL_VALUE_EUR + 1
     total_return_col = COL_TOTAL_RETURN + 1
     stock_return_col = COL_STOCK_RETURN + 1
+    fee_influence_col = COL_FEE_INFLUENCE + 1
 
     lines = [
         'tell application "Numbers"',
@@ -129,6 +142,7 @@ def apply_portfolio_formulas_numbers(
             (value_eur_col, value_eur_formula(zero_row)),
             (total_return_col, total_return_formula(zero_row)),
             (stock_return_col, stock_return_formula(zero_row)),
+            (fee_influence_col, fee_influence_formula(zero_row)),
         )
         for col, formula in formulas:
             escaped = formula.replace('"', '\\"')

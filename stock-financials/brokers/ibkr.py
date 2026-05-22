@@ -95,6 +95,18 @@ def _contract_to_ticker(contract: Any) -> str:
     return symbol
 
 
+def _extract_position_id(pos: Any) -> str | None:
+    """IBKR contract id (conId), prefixed with account when available."""
+    contract = getattr(pos, "contract", None)
+    if contract is None:
+        return None
+    con_id = getattr(contract, "conId", None)
+    if con_id is None:
+        return None
+    account = (getattr(pos, "account", None) or "").strip()
+    return f"{account}:{con_id}" if account else str(con_id)
+
+
 def _row(
     *,
     ticker: str,
@@ -105,6 +117,8 @@ def _row(
     open_date: Any,
     buy_price: Any,
     total_fees: Any,
+    used_platform: str | None = None,
+    position_id: str | None = None,
 ) -> dict[str, Any]:
     market = normalize_market_source(source) or exchange_from_ticker(ticker)
     resolved_currency = currency_for_market_source(
@@ -119,6 +133,8 @@ def _row(
         "Open Date": _parse_date(open_date),
         "Buy Price": normalize_gbp_pence_to_pounds(buy_price, resolved_currency),
         "Total Fees": normalize_gbp_pence_to_pounds(total_fees, resolved_currency),
+        "Used Platform": used_platform,
+        "Position ID": position_id,
     }
 
 
@@ -146,6 +162,15 @@ def _from_csv(path) -> list[dict[str, Any]]:
                     or raw.get("Cost Basis Price")
                     or raw.get("Avg Price"),
                     total_fees=raw.get("Total Fees") or raw.get("Commissions"),
+                    used_platform=raw.get("Used Platform")
+                    or raw.get("Platform")
+                    or "IBKR",
+                    position_id=(
+                        raw.get("Position ID")
+                        or raw.get("PositionID")
+                        or raw.get("conId")
+                        or raw.get("ConId")
+                    ),
                 )
             )
     return rows
@@ -216,6 +241,8 @@ def _positions_from_ib_insync() -> list[dict[str, Any]]:
                     open_date=None,
                     buy_price=avg_cost,
                     total_fees=0.0,
+                    used_platform="IBKR",
+                    position_id=_extract_position_id(pos),
                 )
             )
 
