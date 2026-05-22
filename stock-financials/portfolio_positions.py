@@ -36,6 +36,8 @@ PORTFOLIO_COLUMNS = [
     "Value",
     "Exchange Rate",
     "Value EUR",
+    "Total Return",
+    "Stock Return",
 ]
 
 # Human-readable headers for Numbers / Excel (units in square brackets)
@@ -56,11 +58,20 @@ PORTFOLIO_DISPLAY_NAMES: dict[str, str] = {
     "Value": "Value [local]",
     "Exchange Rate": "Exchange Rate [EUR→local]",
     "Value EUR": "Value [EUR]",
+    "Total Return": "Total Return [EUR]",
+    "Stock Return": "Stock Return [EUR]",
 }
 
 # Filled by Numbers/Excel formulas on export (see portfolio_formulas.py)
 PORTFOLIO_FORMULA_COLUMNS = frozenset(
-    {"Investment", "Investment EUR", "Value", "Value EUR"}
+    {
+        "Investment",
+        "Investment EUR",
+        "Value",
+        "Value EUR",
+        "Total Return",
+        "Stock Return",
+    }
 )
 
 PORTFOLIO_EXPORT_COLUMNS = [
@@ -87,6 +98,12 @@ PORTFOLIO_LEGACY_HEADER_ALIASES: dict[str, str] = {
     "investment [eur]": "Investment EUR",
     "value (eur)": "Value EUR",
     "value [eur]": "Value EUR",
+    "total return": "Total Return",
+    "total return [eur]": "Total Return",
+    "total return (eur)": "Total Return",
+    "stock return": "Stock Return",
+    "stock return [eur]": "Stock Return",
+    "stock return (eur)": "Stock Return",
 }
 
 
@@ -106,6 +123,10 @@ def canonical_portfolio_header(label: str) -> str | None:
         return PORTFOLIO_DISPLAY_NAMES["Exchange Rate"]
     if key in ("value [eur]", "value (eur)"):
         return PORTFOLIO_DISPLAY_NAMES["Value EUR"]
+    if key in ("total return", "total return [eur]", "total return (eur)"):
+        return PORTFOLIO_DISPLAY_NAMES["Total Return"]
+    if key in ("stock return", "stock return [eur]", "stock return (eur)"):
+        return PORTFOLIO_DISPLAY_NAMES["Stock Return"]
     for internal, display in PORTFOLIO_DISPLAY_NAMES.items():
         d = display.lower()
         if key == d or key.startswith(d.split("[")[0].strip().lower()):
@@ -290,6 +311,8 @@ _PORTFOLIO_FORMATTERS: dict[str, Any] = {
     "Value": _fmt_investment_placeholder,
     "Exchange Rate": _fmt_fx_rate,
     "Value EUR": _fmt_investment_placeholder,
+    "Total Return": _fmt_investment_placeholder,
+    "Stock Return": _fmt_investment_placeholder,
 }
 
 

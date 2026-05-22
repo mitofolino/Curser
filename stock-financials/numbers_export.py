@@ -35,6 +35,8 @@ PORTFOLIO_PRICE_COL = 12
 PORTFOLIO_VALUE_COL = 13
 PORTFOLIO_EXCHANGE_RATE_COL = 14  # column O — current EUR→local
 PORTFOLIO_VALUE_EUR_COL = 15  # column P — Value [EUR] = N / O
+PORTFOLIO_TOTAL_RETURN_COL = 16  # column Q — Total Return [EUR] = P − K
+PORTFOLIO_STOCK_RETURN_COL = 17  # column R — Stock Return [EUR]
 
 
 def _write_cell(table, row: int, col: int, value) -> None:
@@ -81,6 +83,8 @@ def _header_column_map(table, expected_columns: list[str]) -> dict[str, int]:
     aliases["exchange rate"] = PORTFOLIO_DISPLAY_NAMES["Exchange Rate"]
     aliases["value [eur]"] = PORTFOLIO_DISPLAY_NAMES["Value EUR"]
     aliases["value (eur)"] = PORTFOLIO_DISPLAY_NAMES["Value EUR"]
+    aliases["total return"] = PORTFOLIO_DISPLAY_NAMES["Total Return"]
+    aliases["stock return"] = PORTFOLIO_DISPLAY_NAMES["Stock Return"]
 
     mapping: dict[str, int] = {}
     for c in range(table.num_cols):
@@ -97,6 +101,16 @@ def _header_column_map(table, expected_columns: list[str]) -> dict[str, int]:
         if display in expected_columns:
             mapping[display] = idx
     return mapping
+
+
+def _ensure_table_dimensions(
+    table, *, min_rows: int, min_cols: int
+) -> None:
+    """Grow table so new portfolio columns (e.g. R) exist before write/formulas."""
+    if table.num_rows < min_rows:
+        table.add_row(num_rows=min_rows - table.num_rows)
+    if table.num_cols < min_cols:
+        table.add_column(num_cols=min_cols - table.num_cols)
 
 
 def _clear_data_rows(table, start_row: int) -> None:
@@ -124,7 +138,7 @@ def apply_portfolio_column_formats_numbers(
     *,
     portfolio_sheet: str = "portfolio",
 ) -> None:
-    """Re-apply formats after formulas (Value [EUR] matches Investment [EUR])."""
+    """Re-apply formats after formulas (EUR columns match Investment [EUR])."""
     from numbers_parser import Document
 
     if portfolio_df.empty:
@@ -154,6 +168,8 @@ def apply_portfolio_column_formats_numbers(
 
     inv_eur = PORTFOLIO_DISPLAY_NAMES["Investment EUR"]
     val_eur = PORTFOLIO_DISPLAY_NAMES["Value EUR"]
+    total_return = PORTFOLIO_DISPLAY_NAMES["Total Return"]
+    stock_return = PORTFOLIO_DISPLAY_NAMES["Stock Return"]
     if inv_eur in col_map:
         apply_eur_currency_column_format(
             table,
@@ -161,17 +177,19 @@ def apply_portfolio_column_formats_numbers(
             data_start_row=PORTFOLIO_DATA_ROW_INDEX,
             num_rows=num_rows,
         )
-    if inv_eur in col_map and val_eur in col_map:
+    for target_header in (val_eur, total_return, stock_return):
+        if inv_eur not in col_map or target_header not in col_map:
+            continue
         if not copy_column_format_from_reference(
             table,
             ref_col=col_map[inv_eur],
-            target_col=col_map[val_eur],
+            target_col=col_map[target_header],
             data_start_row=PORTFOLIO_DATA_ROW_INDEX,
             num_rows=num_rows,
         ):
             apply_eur_currency_column_format(
                 table,
-                col_map[val_eur],
+                col_map[target_header],
                 data_start_row=PORTFOLIO_DATA_ROW_INDEX,
                 num_rows=num_rows,
             )
@@ -183,6 +201,8 @@ def apply_portfolio_column_formats_numbers(
 def _write_portfolio_table(table, df: pd.DataFrame) -> None:
     """Sync unit headers on row 1; write positions from row 2 onward."""
     columns = list(df.columns)
+    min_rows = PORTFOLIO_DATA_ROW_INDEX + max(len(df), 1)
+    _ensure_table_dimensions(table, min_rows=min_rows, min_cols=len(columns))
     col_map = _header_column_map(table, columns)
     _sync_portfolio_headers(table, col_map, columns)
 

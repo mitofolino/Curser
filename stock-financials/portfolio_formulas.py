@@ -23,6 +23,8 @@ COL_PRICE = PORTFOLIO_EXPORT_COLUMNS.index("Price [local]")
 COL_VALUE = PORTFOLIO_EXPORT_COLUMNS.index("Value [local]")
 COL_EXCHANGE_RATE = PORTFOLIO_EXPORT_COLUMNS.index("Exchange Rate [EUR→local]")
 COL_VALUE_EUR = PORTFOLIO_EXPORT_COLUMNS.index("Value [EUR]")
+COL_TOTAL_RETURN = PORTFOLIO_EXPORT_COLUMNS.index("Total Return [EUR]")
+COL_STOCK_RETURN = PORTFOLIO_EXPORT_COLUMNS.index("Stock Return [EUR]")
 
 
 def investment_formula(zero_based_row: int) -> str:
@@ -50,6 +52,20 @@ def value_eur_formula(zero_based_row: int) -> str:
     return f"={value}/{fx}"
 
 
+def total_return_formula(zero_based_row: int) -> str:
+    value_eur = xl_rowcol_to_cell(zero_based_row, COL_VALUE_EUR)
+    inv_eur = xl_rowcol_to_cell(zero_based_row, COL_INVESTMENT_EUR)
+    return f"={value_eur}-{inv_eur}"
+
+
+def stock_return_formula(zero_based_row: int) -> str:
+    value_eur = xl_rowcol_to_cell(zero_based_row, COL_VALUE_EUR)
+    shares = xl_rowcol_to_cell(zero_based_row, COL_SHARES)
+    buy_price = xl_rowcol_to_cell(zero_based_row, COL_BUY_PRICE)
+    open_fx = xl_rowcol_to_cell(zero_based_row, COL_OPEN_FX)
+    return f"={value_eur}-({shares}*{buy_price}/{open_fx})"
+
+
 def apply_portfolio_formulas_openpyxl(ws, num_data_rows: int) -> None:
     """Write Excel formulas for computed portfolio columns."""
     start = PORTFOLIO_DATA_START_ROW
@@ -64,6 +80,16 @@ def apply_portfolio_formulas_openpyxl(ws, num_data_rows: int) -> None:
         )
         ws.cell(row=row_idx, column=COL_VALUE + 1, value=value_formula(zero_row))
         ws.cell(row=row_idx, column=COL_VALUE_EUR + 1, value=value_eur_formula(zero_row))
+        ws.cell(
+            row=row_idx,
+            column=COL_TOTAL_RETURN + 1,
+            value=total_return_formula(zero_row),
+        )
+        ws.cell(
+            row=row_idx,
+            column=COL_STOCK_RETURN + 1,
+            value=stock_return_formula(zero_row),
+        )
 
 
 def apply_portfolio_formulas_numbers(
@@ -83,6 +109,8 @@ def apply_portfolio_formulas_numbers(
     eur_col = COL_INVESTMENT_EUR + 1
     value_col = COL_VALUE + 1
     value_eur_col = COL_VALUE_EUR + 1
+    total_return_col = COL_TOTAL_RETURN + 1
+    stock_return_col = COL_STOCK_RETURN + 1
 
     lines = [
         'tell application "Numbers"',
@@ -99,6 +127,8 @@ def apply_portfolio_formulas_numbers(
             (eur_col, investment_eur_formula(zero_row)),
             (value_col, value_formula(zero_row)),
             (value_eur_col, value_eur_formula(zero_row)),
+            (total_return_col, total_return_formula(zero_row)),
+            (stock_return_col, stock_return_formula(zero_row)),
         )
         for col, formula in formulas:
             escaped = formula.replace('"', '\\"')
@@ -121,7 +151,7 @@ def apply_portfolio_formulas_numbers(
             check=True,
             capture_output=True,
             text=True,
-            timeout=180,
+            timeout=300,
         )
         logger.info(
             "Applied portfolio formulas in Numbers (%d row(s), sheet %s)",
