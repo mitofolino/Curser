@@ -19,13 +19,15 @@ from fx_rates import normalize_currency, prefetch_rates_to_eur, rate_to_eur, to_
 from international import yahoo_symbol_candidates
 from layout import PORTFOLIO_SUMMARY_FILENAME, ticker_dir
 from config import PORTFOLIO_SHEET_NAME
-from portfolio_positions import build_portfolio_dataframe
-from ticker_exports import resolve_export_dir
+from portfolio_positions import _resolve_platform, build_portfolio_dataframe
+from ticker_exports import export_dir_keys_for_ticker, resolve_export_dir
 
 logger = logging.getLogger(__name__)
 
 SUMMARY_COLUMNS = [
     "ticker",
+    "etoro",
+    "ibkr",
     "company",
     "country",
     "currency",
@@ -57,6 +59,8 @@ SUMMARY_COLUMNS = [
 # Human-readable headers for Numbers / Excel (units in square brackets)
 SUMMARY_DISPLAY_NAMES: dict[str, str] = {
     "ticker": "Ticker",
+    "etoro": "eToro",
+    "ibkr": "IBKR",
     "company": "Company",
     "country": "Country",
     "currency": "Currency",
@@ -165,6 +169,17 @@ def _fmt_fx_rate(value: Any) -> str:
         return str(value)
 
 
+def _fmt_true_false(value: Any) -> str:
+    if isinstance(value, bool):
+        return "TRUE" if value else "FALSE"
+    if _is_blank(value):
+        return "FALSE"
+    text = str(value).strip().upper()
+    if text in ("TRUE", "1", "YES", "Y"):
+        return "TRUE"
+    return "FALSE"
+
+
 def _fmt_yes_no(value: Any) -> str:
     if _is_blank(value):
         return ""
@@ -199,6 +214,8 @@ def _fmt_status(value: Any) -> str:
 
 _SUMMARY_FORMATTERS: dict[str, Any] = {
     "ticker": _fmt_text,
+    "etoro": _fmt_true_false,
+    "ibkr": _fmt_true_false,
     "company": _fmt_text,
     "country": _fmt_text,
     "currency": _fmt_text,
@@ -243,6 +260,8 @@ def prepare_summary_for_display(df: pd.DataFrame) -> pd.DataFrame:
         "industry",
         "yahoo_symbol",
         "instrument_type",
+        "etoro",
+        "ibkr",
         "has_annual_statements",
         "has_quarterly_statements",
         "sec_filing",
@@ -371,9 +390,61 @@ def _apply_eur_columns(df: pd.DataFrame) -> pd.DataFrame:
     return df[SUMMARY_COLUMNS]
 
 
-def build_summary_dataframe(results: list[TickerResult]) -> pd.DataFrame:
+def _ticker_keys(ticker: str) -> set[str]:
+    return set(export_dir_keys_for_ticker(str(ticker).strip().upper()))
+
+
+def portfolio_tickers_by_platform(
+    portfolio_df: pd.DataFrame,
+) -> tuple[set[str], set[str]]:
+    """Ticker symbols (uppercase) held on eToro and IBKR in the portfolio sheet."""
+    platform_col = "Used Platform" if "Used Platform" in portfolio_df.columns else None
+    ticker_col = "Ticker" if "Ticker" in portfolio_df.columns else "ticker"
+    if platform_col is None or ticker_col not in portfolio_df.columns:
+        return set(), set()
+
+    etoro: set[str] = set()
+    ibkr: set[str] = set()
+    for _, row in portfolio_df.iterrows():
+        symbol = str(row[ticker_col]).strip().upper()
+        if not symbol:
+            continue
+        platform = _resolve_platform(row.get(platform_col), row.get("Position ID"))
+        if platform == "eToro":
+            etoro.add(symbol)
+        elif platform == "IBKR":
+            ibkr.add(symbol)
+    return etoro, ibkr
+
+
+def _held_on_platform(summary_ticker: str, platform_tickers: set[str]) -> bool:
+    if not platform_tickers:
+        return False
+    keys = _ticker_keys(summary_ticker)
+    for held in platform_tickers:
+        if keys & _ticker_keys(held):
+            return True
+    return False
+
+
+def build_summary_dataframe(
+    results: list[TickerResult],
+    *,
+    portfolio_df: pd.DataFrame | None = None,
+) -> pd.DataFrame:
     rows = [result_to_row(r) for r in results]
     df = pd.DataFrame(rows)
+    if portfolio_df is not None and not portfolio_df.empty:
+        etoro_held, ibkr_held = portfolio_tickers_by_platform(portfolio_df)
+        df["etoro"] = [
+            _held_on_platform(str(t), etoro_held) for t in df["ticker"]
+        ]
+        df["ibkr"] = [
+            _held_on_platform(str(t), ibkr_held) for t in df["ticker"]
+        ]
+    else:
+        df["etoro"] = False
+        df["ibkr"] = False
     return _apply_eur_columns(df)
 
 
@@ -576,7 +647,9 @@ def save_portfolio_and_summary(
         len(portfolio_df),
     )
     results = [load_ticker_result(t) for t in tickers]
-    summary_df = prepare_summary_for_display(build_summary_dataframe(results))
+    summary_df = prepare_summary_for_display(
+        build_summary_dataframe(results, portfolio_df=portfolio_df)
+    )
     path = _persist_summary_and_portfolio(summary_df, portfolio_df)
     ok = sum(1 for r in results if r.ok)
     return path, len(tickers), ok
@@ -635,6 +708,8 @@ def _save_summary_numbers(
 
 def save_summary(results: list[TickerResult]) -> Path:
     """Write summary from explicit results; portfolio still loaded from brokers."""
-    summary_df = prepare_summary_for_display(build_summary_dataframe(results))
     portfolio_df = build_portfolio_dataframe()
+    summary_df = prepare_summary_for_display(
+        build_summary_dataframe(results, portfolio_df=portfolio_df)
+    )
     return _persist_summary_and_portfolio(summary_df, portfolio_df)
