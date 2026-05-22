@@ -67,6 +67,11 @@ PORTFOLIO_EXPORT_COLUMNS = [
     PORTFOLIO_DISPLAY_NAMES[c] for c in PORTFOLIO_COLUMNS
 ]
 
+# Fixed 0-based column indices in portfolio Numbers table (row 1 = headers)
+PORTFOLIO_SHEET_COL_INDEX: dict[str, int] = {
+    PORTFOLIO_DISPLAY_NAMES[c]: i for i, c in enumerate(PORTFOLIO_COLUMNS)
+}
+
 _DISPLAY_TO_INTERNAL = {v: k for k, v in PORTFOLIO_DISPLAY_NAMES.items()}
 
 # Sheet headers without units → internal column key

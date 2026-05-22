@@ -20,6 +20,7 @@ from portfolio_formulas import apply_portfolio_formulas_numbers
 from portfolio_positions import (
     PORTFOLIO_DISPLAY_NAMES,
     PORTFOLIO_EXPORT_COLUMNS,
+    PORTFOLIO_SHEET_COL_INDEX,
     canonical_portfolio_header,
 )
 
@@ -92,6 +93,9 @@ def _header_column_map(table, expected_columns: list[str]) -> dict[str, int]:
             mapping[key] = c
     for i, col in enumerate(expected_columns):
         mapping.setdefault(col, i)
+    for display, idx in PORTFOLIO_SHEET_COL_INDEX.items():
+        if display in expected_columns:
+            mapping[display] = idx
     return mapping
 
 
@@ -101,25 +105,17 @@ def _clear_data_rows(table, start_row: int) -> None:
             table.write(r, c, "")
 
 
+def _write_canonical_headers(table) -> None:
+    """Write row-1 headers with units at fixed column positions (N = Value [local], etc.)."""
+    for display, col_idx in PORTFOLIO_SHEET_COL_INDEX.items():
+        table.write(PORTFOLIO_HEADER_ROW, col_idx, display)
+
+
 def _sync_portfolio_headers(
     table, col_map: dict[str, int], columns: list[str]
 ) -> None:
     """Write canonical headers with units (row 1) for all exported columns."""
-    for col_name in columns:
-        if col_name in col_map:
-            table.write(PORTFOLIO_HEADER_ROW, col_map[col_name], col_name)
-    value_header = PORTFOLIO_DISPLAY_NAMES["Value"]
-    table.write(
-        PORTFOLIO_HEADER_ROW,
-        col_map.get(value_header, PORTFOLIO_VALUE_COL),
-        value_header,
-    )
-    value_eur_header = PORTFOLIO_DISPLAY_NAMES["Value EUR"]
-    table.write(
-        PORTFOLIO_HEADER_ROW,
-        col_map.get(value_eur_header, PORTFOLIO_VALUE_EUR_COL),
-        value_eur_header,
-    )
+    _write_canonical_headers(table)
 
 
 def apply_portfolio_column_formats_numbers(
@@ -144,6 +140,7 @@ def apply_portfolio_column_formats_numbers(
     columns = list(portfolio_df.columns)
     col_map = _header_column_map(table, columns)
     num_rows = len(portfolio_df)
+    _write_canonical_headers(table)
 
     for col in columns:
         if col in col_map:
