@@ -33,7 +33,7 @@ def main() -> int:
         print(
             f"ID{p.get('instrumentID')}: totalFees={tf!r} "
             f"totalExternalFees={te!r} totalExternalTaxes={tt!r} "
-            f"wrong_sum={combined}"
+            f"sum_usd={combined} abs_usd={abs(combined)}"
         )
         extra = {k: v for k, v in fee_fields.items() if k not in ("totalFees", "totalExternalFees")}
         if extra:

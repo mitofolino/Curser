@@ -104,7 +104,7 @@ def _row(
             buy_price, resolved_currency, in_pence=True
         ),
         "Total Fees": normalize_gbp_pence_to_pounds(
-            total_fees, resolved_currency, in_pence=True
+            total_fees, resolved_currency, in_pence=False
         ),
         "Used Platform": used_platform,
         "Position ID": position_id,
@@ -267,22 +267,56 @@ def _instrument_map(instrument_ids: set[int]) -> dict[int, dict[str, Any]]:
     return {iid: mapping[iid] for iid in instrument_ids if iid in mapping}
 
 
-def _position_total_fees(pos: dict) -> float:
+def _position_total_fees_usd(pos: dict) -> float:
     """
-    eToro ``totalFees`` is already in account currency (0 or negative).
+    eToro reports ``totalFees`` and ``totalExternalFees`` in USD (often negative).
 
-    ``totalExternalFees`` is not a dollar amount (often 1.0 / 2.0 as a flag);
-    adding it was turning fees positive. ``totalExternalTaxes`` is separate.
+    Total cost = sum of both fields, stored as a positive amount for the sheet.
     """
-    fees = float(pos.get("totalFees") or 0)
-    taxes = pos.get("totalExternalTaxes")
-    if taxes is not None:
-        t = float(taxes)
-        if t < 0:
-            fees += t
-        elif t > 0:
-            fees -= t
-    return fees
+    total = 0.0
+    for key in ("totalFees", "totalExternalFees"):
+        val = pos.get(key)
+        if val is None or val == "":
+            continue
+        try:
+            total += float(val)
+        except (TypeError, ValueError):
+            continue
+    if total == 0:
+        return 0.0
+    return abs(total)
+
+
+def _position_total_fees_local(
+    pos: dict,
+    *,
+    currency: str | None,
+    source: str | None,
+    ticker: str,
+    open_date: Any,
+) -> float:
+    """USD fee total converted to listing currency (pounds for GBP, not pence)."""
+    fees_usd = _position_total_fees_usd(pos)
+    if fees_usd == 0:
+        return 0.0
+
+    market = normalize_market_source(source) or exchange_from_ticker(ticker)
+    local = currency_for_market_source(market, ticker=ticker, fallback=currency)
+    from fx_rates import prefetch_rates_to_eur_on_dates, usd_to_local_on_date
+
+    open_key = str(open_date or "")[:10]
+    if open_key:
+        prefetch_rates_to_eur_on_dates({("USD", open_key), (local, open_key)})
+
+    converted = usd_to_local_on_date(fees_usd, local, open_date)
+    if converted is None:
+        logger.warning(
+            "eToro: could not convert fees USD→%s for %s; using USD amount",
+            local,
+            ticker,
+        )
+        return fees_usd
+    return converted
 
 
 def _positions_from_portfolio_payload(payload: dict) -> list[dict]:
@@ -328,7 +362,13 @@ def _from_api() -> list[dict[str, Any]]:
                 or pos.get("initialUnits"),
                 open_date=pos.get("openDateTime") or pos.get("openDate"),
                 buy_price=pos.get("openRate") or pos.get("buyPrice"),
-                total_fees=_position_total_fees(pos),
+                total_fees=_position_total_fees_local(
+                    pos,
+                    currency=meta.get("currency"),
+                    source=meta.get("price_source"),
+                    ticker=str(ticker),
+                    open_date=pos.get("openDateTime") or pos.get("openDate"),
+                ),
                 used_platform="eToro",
                 position_id=_extract_position_id(pos),
             )

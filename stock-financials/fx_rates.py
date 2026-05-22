@@ -109,6 +109,31 @@ def prefetch_rates_to_eur(currencies: set[str | None]) -> None:
             rate_to_eur(c)
 
 
+def usd_to_local_on_date(
+    amount_usd: float,
+    local_currency: str | None,
+    open_date: Any,
+) -> float | None:
+    """Convert a USD amount to *local_currency* using Frankfurter (open date, else latest)."""
+    if amount_usd == 0:
+        return 0.0
+    code = normalize_currency(local_currency)
+    if code is None:
+        return None
+    if code == "USD":
+        return float(amount_usd)
+    usd_to_eur = rate_to_eur_on_date("USD", open_date)
+    if usd_to_eur is None:
+        return None
+    amount_eur = float(amount_usd) * usd_to_eur
+    if code == "EUR":
+        return round(amount_eur, 6)
+    eur_to_local = eur_to_local_rate_on_date(code, open_date)
+    if eur_to_local is None:
+        return None
+    return round(amount_eur * eur_to_local, 6)
+
+
 def to_eur(amount: Any, currency: str | None) -> float | None:
     if amount is None or amount == "":
         return None
