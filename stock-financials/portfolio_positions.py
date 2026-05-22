@@ -335,11 +335,102 @@ def _to_float(value: Any) -> float | None:
         return None
 
 
-def enrich_portfolio_fields(df: pd.DataFrame) -> pd.DataFrame:
+def _portfolio_raw_to_internal(raw: pd.DataFrame) -> pd.DataFrame:
+    rename: dict[str, str] = {}
+    for col in raw.columns:
+        header = canonical_portfolio_header(str(col)) or str(col).strip()
+        internal = _DISPLAY_TO_INTERNAL.get(header)
+        if internal:
+            rename[col] = internal
+    return _align_template_columns(raw.rename(columns=rename))
+
+
+def read_existing_portfolio_positions(path: Path | None = None) -> pd.DataFrame:
+    """Load current portfolio sheet rows (internal column names)."""
+    raw = read_portfolio_template(path)
+    if raw is None or raw.empty:
+        return pd.DataFrame(columns=PORTFOLIO_COLUMNS)
+    return _portfolio_raw_to_internal(raw)
+
+
+def _index_existing_positions(existing: pd.DataFrame) -> dict[tuple[str, str], int]:
+    index: dict[tuple[str, str], int] = {}
+    for idx, row in existing.iterrows():
+        platform = _resolve_platform(row.get("Used Platform"), row.get("Position ID"))
+        if not platform:
+            continue
+        for key in _position_id_lookup_keys(platform, row.get("Position ID")):
+            index[(platform, key)] = idx
+        ticker = row.get("Ticker")
+        if not _is_blank(ticker):
+            index[(platform, str(ticker).strip().upper())] = idx
+    return index
+
+
+def _match_existing_row_index(
+    row: dict[str, Any], index: dict[tuple[str, str], int]
+) -> int | None:
+    platform = _resolve_platform(row.get("Used Platform"), row.get("Position ID"))
+    if not platform:
+        return None
+    for key in _position_id_lookup_keys(platform, row.get("Position ID")):
+        hit = index.get((platform, key))
+        if hit is not None:
+            return hit
+    ticker = row.get("Ticker")
+    if not _is_blank(ticker):
+        return index.get((platform, str(ticker).strip().upper()))
+    return None
+
+
+def merge_fetched_with_existing(
+    fetched: pd.DataFrame, existing: pd.DataFrame
+) -> tuple[pd.DataFrame, frozenset[int]]:
+    """
+    For positions already on the sheet, keep row data and only refresh live fields
+    later (Update Date, Price, Exchange Rate). New API positions get a full row.
+    """
+    if existing.empty:
+        return fetched, frozenset()
+
+    existing = _align_template_columns(existing)
+    index = _index_existing_positions(existing)
+    merged_rows: list[dict[str, Any]] = []
+    incremental: set[int] = set()
+
+    for _, api_row in fetched.iterrows():
+        api_dict = _normalize_row(api_row.to_dict())
+        hit = _match_existing_row_index(api_dict, index)
+        if hit is not None:
+            merged_rows.append(_normalize_row(existing.loc[hit].to_dict()))
+            incremental.add(len(merged_rows) - 1)
+        else:
+            merged_rows.append(api_dict)
+
+    if not merged_rows:
+        return fetched, frozenset()
+
+    out = pd.DataFrame(merged_rows, columns=PORTFOLIO_COLUMNS)
+    if incremental:
+        logger.info(
+            "Portfolio: incremental update for %d existing row(s), "
+            "full update for %d new row(s)",
+            len(incremental),
+            len(out) - len(incremental),
+        )
+    return out, frozenset(incremental)
+
+
+def enrich_portfolio_fields(
+    df: pd.DataFrame,
+    *,
+    incremental_row_indices: frozenset[int] | None = None,
+) -> pd.DataFrame:
     """Add FX rate, update timestamp; Investment columns use sheet formulas."""
     if df.empty:
         return df
 
+    incremental = incremental_row_indices or frozenset()
     out = _align_template_columns(df).copy()
     from market_source import currency_for_market_source, normalize_market_source
 
@@ -348,6 +439,9 @@ def enrich_portfolio_fields(df: pd.DataFrame) -> pd.DataFrame:
     currencies: set[str | None] = set()
     historical_pairs: set[tuple[str | None, Any]] = set()
     for idx in out.index:
+        if idx in incremental:
+            currencies.add(out.at[idx, "Currency"])
+            continue
         ticker = out.at[idx, "Ticker"]
         source = normalize_market_source(out.at[idx, "Source"])
         if source:
@@ -362,13 +456,21 @@ def enrich_portfolio_fields(df: pd.DataFrame) -> pd.DataFrame:
         open_day = parse_open_date_for_fx(out.at[idx, "Open Date"])
         if open_day:
             historical_pairs.add((currency, open_day))
+    for idx in incremental:
+        currency = out.at[idx, "Currency"]
+        if currency:
+            currencies.add(currency)
     prefetch_rates_to_eur_on_dates(historical_pairs)
     prefetch_rates_to_eur(currencies)
 
     for idx in out.index:
         currency = out.at[idx, "Currency"]
+        if idx in incremental:
+            out.at[idx, "Exchange Rate"] = eur_to_local_rate_on_date(currency, None)
+            out.at[idx, "Update Date"] = now
+            continue
+
         open_date = out.at[idx, "Open Date"]
-        # Open FX: rate on open date; if missing/invalid, latest rate (same as column O).
         fx = eur_to_local_rate_on_date(currency, open_date)
         out.at[idx, "Open Exchange Rate"] = fx
         out.at[idx, "Exchange Rate"] = eur_to_local_rate_on_date(currency, None)
@@ -456,7 +558,7 @@ def prepare_portfolio_for_display(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def _empty_portfolio_df() -> pd.DataFrame:
-    return pd.DataFrame(columns=PORTFOLIO_EXPORT_COLUMNS)
+    return pd.DataFrame(columns=PORTFOLIO_COLUMNS)
 
 
 def _normalize_row(row: dict[str, Any]) -> dict[str, Any]:
@@ -599,13 +701,7 @@ def load_preserved_open_dates(path: Path | None = None) -> dict[tuple[str, str],
     if raw is None or raw.empty:
         return {}
 
-    rename: dict[str, str] = {}
-    for col in raw.columns:
-        header = canonical_portfolio_header(str(col)) or str(col).strip()
-        internal = _DISPLAY_TO_INTERNAL.get(header)
-        if internal:
-            rename[col] = internal
-    df = raw.rename(columns=rename)
+    df = _portfolio_raw_to_internal(raw)
 
     preserved: dict[tuple[str, str], str] = {}
     for _, row in df.iterrows():
@@ -702,7 +798,11 @@ def fetch_all_positions() -> pd.DataFrame:
 
 def build_portfolio_dataframe() -> pd.DataFrame:
     """Live positions from eToro + IBKR, formatted for Numbers / Excel export."""
-    return prepare_portfolio_for_display(enrich_portfolio_fields(fetch_all_positions()))
+    existing = read_existing_portfolio_positions()
+    fetched = fetch_all_positions()
+    merged, incremental = merge_fetched_with_existing(fetched, existing)
+    enriched = enrich_portfolio_fields(merged, incremental_row_indices=incremental)
+    return prepare_portfolio_for_display(enriched)
 
 
 def portfolio_summary_path() -> Path:

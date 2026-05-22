@@ -39,7 +39,7 @@ Only periods within the **last N years** are exported (`STATEMENT_YEARS` in `.en
 | `{TICKER}_{date}_company_overview.xlsx` | Yahoo Finance | Key metrics |
 | `{TICKER}_{date}_etf_overview.xlsx` | Yahoo Finance | ETFs only |
 | `{TICKER}_{date}_10_K_*.html` / `20_F_*` | SEC EDGAR | Last N annual filings (`SEC_FILINGS_LIMIT`, default = `STATEMENT_YEARS`) |
-| **`portfolio_summary.xlsx`** → `summary` | Generated | All tickers; amounts in local currency **and EUR** |
+| **`portfolio_summary.xlsx`** → `summary` | Generated | **Distinct tickers from `portfolio`** (overview + EUR columns from `OUTPUT_DIR` exports) |
 | **`portfolio_summary.xlsx`** → `portfolio` | eToro + IBKR API/CSV | Ticker, Full Name, Source, Currency, Shares, Open Date, Buy Price, Total Fees |
 
 ### Non-US / global companies
@@ -83,6 +83,8 @@ python main.py --cleanup   # remove old statements/ and sec/ subfolders
 
 Configure brokers in `.env` (see `.env.example`). On each `python main.py` run, live positions are merged into that sheet.
 
+**Portfolio + summary refresh** (`./run_update_numbers.sh` or `python fetch_portfolio.py`): updates **`portfolio`** from eToro/IBKR and rebuilds **`summary`** with one row per **distinct ticker** you hold, filled from the latest `*_company_overview.xlsx` / `*_etf_overview.xlsx` and statement files under `OUTPUT_DIR`. Run `python main.py` first (or `--tickers …`) so overview files exist; tickers without exports show `status` = failed.
+
 **Cell formatting:** Values are written as real numbers and dates (not `1.2 B` abbreviations). Units in column headers drive formatting — e.g. `[local]` / `[EUR]` use thousands separators and 2 decimals, `[%]` uses percent style, `[UTC]` uses `yyyy-MM-dd HH:mm:ss`. See `numbers_format.py`.
 
 **GBP [local] amounts:** eToro reports LSE **buy price** in **pence**; the pipeline divides by 100 when currency is GBP (see `normalize_gbp_pence_to_pounds` in `market_source.py`). **Total fees** from the eToro API are **`totalFees` + `totalExternalFees` in USD**, converted to listing currency via Frankfurter (open date). **Price [local]** for LSE / `.L` tickers uses the same ÷100 on Yahoo closes (`yahoo_price_to_local_pounds`).
@@ -97,6 +99,8 @@ Set `PORTFOLIO_OUTPUT=numbers` (default), `xlsx`, or `both` in `.env`. Per-ticke
 | **IBKR** | `IBKR_ENABLED=true`, **TWS** or **IB Gateway** running with API enabled (`IBKR_HOST` / `IBKR_PORT`, default `127.0.0.1:7497` paper), optional `IBKR_ACCOUNT_ID` | Flex/Activity export CSV → `IBKR_CSV_PATH` |
 
 IBKR uses **[ib_insync](https://ib-insync.readthedocs.io/)** (`ib.positions()`). **Open Date [UTC]** is not on the position snapshot — enter it manually in the portfolio sheet. On each run, existing **Open Date [UTC]** values for IBKR positions are **preserved** (matched by Position ID or Ticker) and are not overwritten by the API. Optional **`IBKR_CSV_PATH`** can supply dates when not using the live API. Commissions are not on the position snapshot — fees export as `0` unless you use CSV.
+
+When a position is **already on the portfolio sheet** (matched by **Used Platform** + **Position ID**, or Ticker), only **Update Date [UTC]**, **Price [local]**, and **Exchange Rate [EUR→local]** are refreshed from the brokers; all other columns stay as in the sheet. **New** positions get a full row from the API.
 
 ## Privacy / Git
 

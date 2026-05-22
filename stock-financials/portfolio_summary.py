@@ -16,9 +16,11 @@ from config import (
     PORTFOLIO_OUTPUT,
 )
 from fx_rates import normalize_currency, prefetch_rates_to_eur, rate_to_eur, to_eur
+from international import yahoo_symbol_candidates
 from layout import PORTFOLIO_SUMMARY_FILENAME, ticker_dir
 from config import PORTFOLIO_SHEET_NAME
 from portfolio_positions import build_portfolio_dataframe
+from ticker_exports import resolve_export_dir
 
 logger = logging.getLogger(__name__)
 
@@ -260,12 +262,17 @@ def prepare_summary_for_display(df: pd.DataFrame) -> pd.DataFrame:
     return out[[SUMMARY_DISPLAY_NAMES[c] for c in SUMMARY_COLUMNS]]
 
 
+def _export_folder(ticker: str) -> tuple[str, Path] | None:
+    return resolve_export_dir(ticker)
+
+
 def _latest_income_statement_file(ticker: str) -> Path | None:
-    folder = ticker_dir(OUTPUT_DIR, ticker)
-    if not folder.exists():
+    resolved = _export_folder(ticker)
+    if resolved is None:
         return None
+    _folder_key, folder = resolved
     candidates = sorted(
-        folder.glob(f"{ticker}_*_income_statement*.xlsx"),
+        folder.glob("*_income_statement*.xlsx"),
         reverse=True,
     )
     annual = [p for p in candidates if "annual" in p.name.lower()]
@@ -290,9 +297,12 @@ def _revenue_from_file(path: Path) -> float | None:
 
 def _revenue_metrics(ticker: str) -> tuple[Any, Any]:
     """Latest revenue and approximate 5y growth from annual income statement files."""
-    folder = ticker_dir(OUTPUT_DIR, ticker)
+    resolved = _export_folder(ticker)
+    if resolved is None:
+        return None, None
+    _folder_key, folder = resolved
     annual_files = sorted(
-        folder.glob(f"{ticker}_*_income_statement_annual.xlsx"),
+        folder.glob("*_income_statement_annual.xlsx"),
         reverse=True,
     )
     if not annual_files:
@@ -367,6 +377,211 @@ def build_summary_dataframe(results: list[TickerResult]) -> pd.DataFrame:
     return _apply_eur_columns(df)
 
 
+def _overview_from_xlsx(path: Path) -> dict[str, Any]:
+    df = pd.read_excel(path)
+    if "field" not in df.columns or "value" not in df.columns:
+        return {}
+    out: dict[str, Any] = {}
+    for _, row in df.iterrows():
+        key = row.get("field")
+        if key is None or (isinstance(key, float) and pd.isna(key)):
+            continue
+        val = row.get("value")
+        if isinstance(val, float) and pd.isna(val):
+            val = None
+        out[str(key)] = val
+    if "has_quarterly" in out:
+        out["has_quarterly"] = bool(out["has_quarterly"])
+    return out
+
+
+def _ticker_has_exports(dest: Path) -> bool:
+    return dest.is_dir() and any(dest.iterdir())
+
+
+def _sec_form_on_disk(dest: Path) -> str | None:
+    names = [
+        p.name
+        for p in dest.iterdir()
+        if p.is_file()
+        and "primary" in p.name.lower()
+        and ("_10_K_" in p.name or "_20_F_" in p.name)
+    ]
+    if any("_20_F_" in n for n in names):
+        return "20-F"
+    if any("_10_K_" in n for n in names):
+        return "10-K"
+    return None
+
+
+def _overview_from_yahoo_info(info: dict[str, Any], *, symbol: str, ticker: str) -> dict[str, Any]:
+    return {
+        "company": (info.get("longName") or info.get("shortName") or ticker).strip(),
+        "yahoo_symbol": symbol,
+        "country": info.get("country"),
+        "currency": info.get("currency"),
+        "sector": info.get("sector"),
+        "industry": info.get("industry"),
+        "market_cap": info.get("marketCap"),
+        "trailing_pe": info.get("trailingPE"),
+        "forward_pe": info.get("forwardPE"),
+        "dividend_yield": info.get("dividendYield"),
+        "profit_margins": info.get("profitMargins"),
+        "return_on_equity": info.get("returnOnEquity"),
+        "debt_to_equity": info.get("debtToEquity"),
+        "free_cashflow": info.get("freeCashflow"),
+        "website": info.get("website"),
+        "has_annual_statements": False,
+        "has_quarterly": False,
+    }
+
+
+def _live_overview_from_yahoo(ticker: str) -> tuple[dict[str, Any], str] | None:
+    """Fetch company/ETF metrics from Yahoo when no local export folder exists."""
+    import yfinance as yf
+
+    for symbol in yahoo_symbol_candidates(ticker):
+        try:
+            info = yf.Ticker(symbol).info or {}
+        except Exception as e:
+            logger.debug("%s@%s: Yahoo info failed: %s", ticker, symbol, e)
+            continue
+        if not (
+            info.get("longName")
+            or info.get("shortName")
+            or info.get("marketCap")
+        ):
+            continue
+        quote_type = (info.get("quoteType") or "").upper()
+        if quote_type in ("ETF", "MUTUALFUND"):
+            instrument = "etf"
+        elif quote_type:
+            instrument = "stock"
+        else:
+            instrument = "unknown"
+        logger.info("%s: summary from live Yahoo (%s)", ticker, symbol)
+        return _overview_from_yahoo_info(info, symbol=symbol, ticker=ticker), instrument
+    return None
+
+
+def load_ticker_result(ticker: str) -> TickerResult:
+    """Load overview from disk exports, else live Yahoo; revenue from disk when present."""
+    result = TickerResult(ticker=ticker)
+    resolved = resolve_export_dir(ticker)
+
+    if resolved is not None:
+        folder_key, dest = resolved
+        overview_paths = sorted(dest.glob("*_company_overview.xlsx"), reverse=True)
+        etf_paths = sorted(dest.glob("*_etf_overview.xlsx"), reverse=True)
+
+        if etf_paths and (
+            not overview_paths
+            or etf_paths[0].stat().st_mtime >= overview_paths[0].stat().st_mtime
+        ):
+            result.instrument_type = "etf"
+            result.overview = _overview_from_xlsx(etf_paths[0])
+        elif overview_paths:
+            result.instrument_type = "stock"
+            result.overview = _overview_from_xlsx(overview_paths[0])
+            result.has_quarterly = bool(result.overview.get("has_quarterly"))
+
+        if result.overview:
+            logger.debug("%s: overview from disk (%s)", ticker, folder_key)
+        result.sec_form = _sec_form_on_disk(dest)
+        result.files_exported = len(list(dest.iterdir()))
+        result.ok = bool(result.overview) or _ticker_has_exports(dest)
+
+    if not result.overview:
+        live = _live_overview_from_yahoo(ticker)
+        if live is not None:
+            result.overview, result.instrument_type = live
+            result.ok = True
+        elif resolved is not None:
+            logger.warning(
+                "%s: export folder %s has no overview; run: python main.py --tickers %s",
+                ticker,
+                resolved[0],
+                ticker,
+            )
+        else:
+            logger.warning(
+                "%s: no export folder under %s; run: python main.py --tickers %s",
+                ticker,
+                OUTPUT_DIR,
+                ticker,
+            )
+
+    return result
+
+
+def distinct_tickers_from_portfolio(portfolio_df: pd.DataFrame) -> list[str]:
+    """Unique tickers from the portfolio sheet (display or internal column names)."""
+    ticker_col = None
+    for name in ("Ticker", "ticker"):
+        if name in portfolio_df.columns:
+            ticker_col = name
+            break
+    if ticker_col is None:
+        return []
+
+    seen: set[str] = set()
+    tickers: list[str] = []
+    for value in portfolio_df[ticker_col]:
+        if _is_blank(value):
+            continue
+        symbol = str(value).strip().upper()
+        if not symbol or symbol in seen:
+            continue
+        seen.add(symbol)
+        tickers.append(symbol)
+    return sorted(tickers)
+
+
+def _persist_summary_and_portfolio(
+    summary_df: pd.DataFrame, portfolio_df: pd.DataFrame
+) -> Path:
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    mode = PORTFOLIO_OUTPUT
+    last_path = PORTFOLIO_NUMBERS_PATH
+
+    if mode in ("xlsx", "both"):
+        last_path = _save_summary_xlsx(summary_df, portfolio_df)
+    if mode in ("numbers", "both"):
+        last_path = _save_summary_numbers(summary_df, portfolio_df)
+    if mode not in ("xlsx", "numbers", "both"):
+        logger.warning("Unknown PORTFOLIO_OUTPUT=%s; using numbers", mode)
+        last_path = _save_summary_numbers(summary_df, portfolio_df)
+    return last_path
+
+
+def save_portfolio_and_summary(
+    *,
+    portfolio_df: pd.DataFrame | None = None,
+) -> tuple[Path, int, int]:
+    """
+    Refresh portfolio from brokers and summary from distinct portfolio tickers.
+
+    Summary rows use exported overview / statement files under OUTPUT_DIR.
+    Returns (path, distinct_ticker_count, summary_rows_ok).
+    """
+    portfolio_df = (
+        portfolio_df
+        if portfolio_df is not None
+        else build_portfolio_dataframe()
+    )
+    tickers = distinct_tickers_from_portfolio(portfolio_df)
+    logger.info(
+        "Summary: %d distinct ticker(s) from %d portfolio row(s)",
+        len(tickers),
+        len(portfolio_df),
+    )
+    results = [load_ticker_result(t) for t in tickers]
+    summary_df = prepare_summary_for_display(build_summary_dataframe(results))
+    path = _persist_summary_and_portfolio(summary_df, portfolio_df)
+    ok = sum(1 for r in results if r.ok)
+    return path, len(tickers), ok
+
+
 def _save_summary_xlsx(
     summary_df: pd.DataFrame, portfolio_df: pd.DataFrame
 ) -> Path:
@@ -419,19 +634,7 @@ def _save_summary_numbers(
 
 
 def save_summary(results: list[TickerResult]) -> Path:
+    """Write summary from explicit results; portfolio still loaded from brokers."""
     summary_df = prepare_summary_for_display(build_summary_dataframe(results))
     portfolio_df = build_portfolio_dataframe()
-    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-
-    mode = PORTFOLIO_OUTPUT
-    last_path = PORTFOLIO_NUMBERS_PATH
-
-    if mode in ("xlsx", "both"):
-        last_path = _save_summary_xlsx(summary_df, portfolio_df)
-    if mode in ("numbers", "both"):
-        last_path = _save_summary_numbers(summary_df, portfolio_df)
-    if mode not in ("xlsx", "numbers", "both"):
-        logger.warning("Unknown PORTFOLIO_OUTPUT=%s; using numbers", mode)
-        last_path = _save_summary_numbers(summary_df, portfolio_df)
-
-    return last_path
+    return _persist_summary_and_portfolio(summary_df, portfolio_df)

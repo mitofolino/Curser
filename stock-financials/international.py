@@ -67,6 +67,7 @@ def yahoo_symbol_candidates(ticker: str) -> list[str]:
     # Bare tickers: also try common home listings for known names
     extra = {
         "AZN": "AZN.L",
+        "RBOT": "RBOT.L",
         "TSM": "TSM",
         "SAP": "SAP.DE",
         "NVO": "NVO",
