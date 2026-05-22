@@ -96,7 +96,7 @@ Set `PORTFOLIO_OUTPUT=numbers` (default), `xlsx`, or `both` in `.env`. Per-ticke
 | **eToro** | `ETORO_ENABLED=true`, `ETORO_API_KEY`, correct `ETORO_API_URL` from eToro’s API docs for your account | Export positions CSV → `ETORO_CSV_PATH` |
 | **IBKR** | `IBKR_ENABLED=true`, **TWS** or **IB Gateway** running with API enabled (`IBKR_HOST` / `IBKR_PORT`, default `127.0.0.1:7497` paper), optional `IBKR_ACCOUNT_ID` | Flex/Activity export CSV → `IBKR_CSV_PATH` |
 
-IBKR uses **[ib_insync](https://ib-insync.readthedocs.io/)** (`ib.positions()`). Open date and commissions are not on the position snapshot — fees export as `0` unless you use CSV with those columns.
+IBKR uses **[ib_insync](https://ib-insync.readthedocs.io/)** (`ib.positions()`). **Open Date [UTC]** is *not* on the position snapshot. The pipeline tries, in order: (1) TWS execution history (`ib.fills()` + `reqExecutions`, usually only **recent** trades), (2) **`reqCompletedOrders`** if `IBKR_READONLY=false`, (3) **values already in the portfolio sheet** (preserved on each run), (4) **`IBKR_CSV_PATH`** with an Open Date column (Activity/Flex export for full history). Commissions are not on the position snapshot — fees export as `0` unless you use CSV.
 
 ## Privacy / Git
 

@@ -69,3 +69,5 @@ IBKR_CONNECT_TIMEOUT = int(os.getenv("IBKR_CONNECT_TIMEOUT", "15"))
 IBKR_READONLY = os.getenv("IBKR_READONLY", "true").lower() in ("1", "true", "yes")
 IBKR_ACCOUNT_ID = os.getenv("IBKR_ACCOUNT_ID", "").strip()
 IBKR_CSV_PATH = Path(os.getenv("IBKR_CSV_PATH", "")).expanduser() if os.getenv("IBKR_CSV_PATH") else None
+# Reserved for future Flex/history integration (TWS reqExecutions is short-lived)
+IBKR_EXECUTION_DAYS = int(os.getenv("IBKR_EXECUTION_DAYS", "365"))

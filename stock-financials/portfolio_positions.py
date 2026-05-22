@@ -476,10 +476,78 @@ def read_portfolio_template(path: Path | None = None) -> pd.DataFrame | None:
     return None
 
 
+def load_preserved_open_dates(path: Path | None = None) -> dict[tuple[str, str], str]:
+    """
+    Read Open Date from the existing portfolio sheet before it is overwritten.
+
+    Keys: (Used Platform, Position ID) and (Used Platform, Ticker).
+    """
+    raw = read_portfolio_template(path)
+    if raw is None or raw.empty:
+        return {}
+
+    rename: dict[str, str] = {}
+    for col in raw.columns:
+        header = canonical_portfolio_header(str(col)) or str(col).strip()
+        internal = _DISPLAY_TO_INTERNAL.get(header)
+        if internal:
+            rename[col] = internal
+    df = raw.rename(columns=rename)
+
+    preserved: dict[tuple[str, str], str] = {}
+    for _, row in df.iterrows():
+        platform = _fmt_platform(row.get("Used Platform"))
+        open_date = row.get("Open Date")
+        if not platform or _is_blank(open_date):
+            continue
+        od = _fmt_open_date(open_date)
+        if not od:
+            continue
+        pos_id = row.get("Position ID")
+        if not _is_blank(pos_id):
+            preserved[(platform, str(pos_id).strip())] = od
+        ticker = row.get("Ticker")
+        if not _is_blank(ticker):
+            preserved[(platform, str(ticker).strip().upper())] = od
+    if preserved:
+        logger.info(
+            "Preserved %d open date(s) from existing portfolio sheet", len(preserved)
+        )
+    return preserved
+
+
+def _apply_preserved_open_dates(
+    rows: list[dict[str, Any]], preserved: dict[tuple[str, str], str]
+) -> None:
+    if not preserved:
+        return
+    filled = 0
+    for row in rows:
+        if not _is_blank(row.get("Open Date")):
+            continue
+        platform = _fmt_platform(row.get("Used Platform"))
+        if not platform:
+            continue
+        pos_id = row.get("Position ID")
+        ticker = row.get("Ticker")
+        od = None
+        if not _is_blank(pos_id):
+            od = preserved.get((platform, str(pos_id).strip()))
+        if not od and not _is_blank(ticker):
+            od = preserved.get((platform, str(ticker).strip().upper()))
+        if od:
+            row["Open Date"] = od
+            filled += 1
+    if filled:
+        logger.info("Restored open date on %d row(s) from previous sheet", filled)
+
+
 def fetch_all_positions() -> pd.DataFrame:
     """Fetch positions from enabled brokers; returns normalized DataFrame."""
     from brokers.etoro import fetch_etoro_positions
     from brokers.ibkr import fetch_ibkr_positions
+
+    preserved_dates = load_preserved_open_dates()
 
     rows: list[dict[str, Any]] = []
     for fetcher, label in (
@@ -499,6 +567,7 @@ def fetch_all_positions() -> pd.DataFrame:
     if not rows:
         return _empty_portfolio_df()
 
+    _apply_preserved_open_dates(rows, preserved_dates)
     normalized = [_normalize_row(r) for r in rows]
     return pd.DataFrame(normalized, columns=PORTFOLIO_COLUMNS)
 
