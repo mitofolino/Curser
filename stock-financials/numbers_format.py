@@ -40,9 +40,7 @@ def infer_column_format(header: str) -> ColumnFormat:
     if "[%]" in h:
         return ColumnFormat("percentage", decimal_places=2, thousands=False)
 
-    if "eur→local" in h or "eur2" in h or (
-        "exchange rate" in h and "open" in h
-    ):
+    if "eur→local" in h or "eur2" in h or "exchange rate" in h:
         return ColumnFormat("number", decimal_places=6, thousands=False)
 
     if "p/e" in h:

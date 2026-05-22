@@ -10,7 +10,11 @@ from typing import Any
 import pandas as pd
 
 from config import OUTPUT_DIR, PORTFOLIO_NUMBERS_PATH, PORTFOLIO_SHEET_NAME
-from fx_rates import eur_to_local_rate_on_date, prefetch_rates_to_eur_on_dates
+from fx_rates import (
+    eur_to_local_rate_on_date,
+    prefetch_rates_to_eur,
+    prefetch_rates_to_eur_on_dates,
+)
 from layout import PORTFOLIO_SUMMARY_FILENAME
 
 logger = logging.getLogger(__name__)
@@ -30,6 +34,7 @@ PORTFOLIO_COLUMNS = [
     "Update Date",
     "Price",
     "Value",
+    "Exchange Rate",
 ]
 
 # Human-readable headers for Numbers / Excel (units in square brackets)
@@ -48,6 +53,7 @@ PORTFOLIO_DISPLAY_NAMES: dict[str, str] = {
     "Update Date": "Update Date [UTC]",
     "Price": "Price [local]",
     "Value": "Value [local]",
+    "Exchange Rate": "Exchange Rate [EUR→local]",
 }
 
 # Filled by Numbers/Excel formulas on export (see portfolio_formulas.py)
@@ -67,6 +73,7 @@ PORTFOLIO_LEGACY_HEADER_ALIASES: dict[str, str] = {
     "price": "Price",
     "prices": "Price",
     "value": "Value",
+    "exchange rate": "Exchange Rate",
     "investment (eur)": "Investment EUR",
     "investment [eur]": "Investment EUR",
 }
@@ -84,6 +91,8 @@ def canonical_portfolio_header(label: str) -> str | None:
         internal = PORTFOLIO_LEGACY_HEADER_ALIASES[key]
         if internal in PORTFOLIO_DISPLAY_NAMES:
             return PORTFOLIO_DISPLAY_NAMES[internal]
+    if "exchange rate" in key and "open" not in key:
+        return PORTFOLIO_DISPLAY_NAMES["Exchange Rate"]
     for internal, display in PORTFOLIO_DISPLAY_NAMES.items():
         d = display.lower()
         if key == d or key.startswith(d.split("[")[0].strip().lower()):
@@ -207,6 +216,7 @@ def enrich_portfolio_fields(df: pd.DataFrame) -> pd.DataFrame:
         open_date = out.at[idx, "Open Date"]
         fx = eur_to_local_rate_on_date(currency, open_date)
         out.at[idx, "Open Exchange Rate"] = fx
+        out.at[idx, "Exchange Rate"] = eur_to_local_rate_on_date(currency, None)
         out.at[idx, "Update Date"] = now
 
         shares = _to_float(out.at[idx, "Shares"])
@@ -229,14 +239,23 @@ def enrich_portfolio_fields(df: pd.DataFrame) -> pd.DataFrame:
         if out.at[idx, "Currency"]
     }
     prefetch_rates_to_eur_on_dates(pairs)
+    prefetch_rates_to_eur({out.at[idx, "Currency"] for idx in out.index})
 
     from portfolio_quotes import fetch_last_prices
 
     tickers = [str(out.at[idx, "Ticker"]).strip() for idx in out.index]
     last_prices = fetch_last_prices(tickers)
+    from market_source import yahoo_price_to_local_pounds
+
     for idx in out.index:
         sym = str(out.at[idx, "Ticker"]).strip().upper()
-        out.at[idx, "Price"] = last_prices.get(sym)
+        raw_price = last_prices.get(sym)
+        out.at[idx, "Price"] = yahoo_price_to_local_pounds(
+            raw_price,
+            out.at[idx, "Currency"],
+            source=out.at[idx, "Source"],
+            ticker=sym,
+        )
 
     return out
 
@@ -256,6 +275,7 @@ _PORTFOLIO_FORMATTERS: dict[str, Any] = {
     "Update Date": _fmt_open_date,
     "Price": _fmt_price,
     "Value": _fmt_investment_placeholder,
+    "Exchange Rate": _fmt_fx_rate,
 }
 
 

@@ -115,6 +115,44 @@ def normalize_local_buy_price(price: Any, currency: str | None) -> Any:
     return normalize_gbp_pence_to_pounds(price, currency)
 
 
+def is_uk_pence_listing(
+    currency: str | None,
+    *,
+    source: str | None = None,
+    ticker: str | None = None,
+) -> bool:
+    """True when [local] amounts for this row are quoted in GB pence (LSE / .L)."""
+    cur = _normalize_currency_code(currency)
+    if cur not in ("GBP", "GBX"):
+        return False
+    market = normalize_market_source(source) or exchange_from_ticker(ticker)
+    if market == "LSE":
+        return True
+    if ticker and str(ticker).strip().upper().endswith(".L"):
+        return True
+    return False
+
+
+def yahoo_price_to_local_pounds(
+    price: Any,
+    currency: str | None,
+    *,
+    source: str | None = None,
+    ticker: str | None = None,
+) -> Any:
+    """
+    Convert Yahoo last close to pounds for the Price [local] column.
+
+    LSE listings return closes in pence (same as eToro buy price); divide by 100
+    so Price matches Buy Price [local] units.
+    """
+    if price is None or price == "":
+        return price
+    if not is_uk_pence_listing(currency, source=source, ticker=ticker):
+        return price
+    return normalize_gbp_pence_to_pounds(price, currency or "GBP", in_pence=True)
+
+
 def normalize_market_source(value: str | None) -> str | None:
     if not value or not str(value).strip():
         return None
