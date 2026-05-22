@@ -35,6 +35,7 @@ PORTFOLIO_COLUMNS = [
     "Price",
     "Value",
     "Exchange Rate",
+    "Value EUR",
 ]
 
 # Human-readable headers for Numbers / Excel (units in square brackets)
@@ -54,10 +55,13 @@ PORTFOLIO_DISPLAY_NAMES: dict[str, str] = {
     "Price": "Price [local]",
     "Value": "Value [local]",
     "Exchange Rate": "Exchange Rate [EUR→local]",
+    "Value EUR": "Value [EUR]",
 }
 
 # Filled by Numbers/Excel formulas on export (see portfolio_formulas.py)
-PORTFOLIO_FORMULA_COLUMNS = frozenset({"Investment", "Investment EUR", "Value"})
+PORTFOLIO_FORMULA_COLUMNS = frozenset(
+    {"Investment", "Investment EUR", "Value", "Value EUR"}
+)
 
 PORTFOLIO_EXPORT_COLUMNS = [
     PORTFOLIO_DISPLAY_NAMES[c] for c in PORTFOLIO_COLUMNS
@@ -76,6 +80,8 @@ PORTFOLIO_LEGACY_HEADER_ALIASES: dict[str, str] = {
     "exchange rate": "Exchange Rate",
     "investment (eur)": "Investment EUR",
     "investment [eur]": "Investment EUR",
+    "value (eur)": "Value EUR",
+    "value [eur]": "Value EUR",
 }
 
 
@@ -93,6 +99,8 @@ def canonical_portfolio_header(label: str) -> str | None:
             return PORTFOLIO_DISPLAY_NAMES[internal]
     if "exchange rate" in key and "open" not in key:
         return PORTFOLIO_DISPLAY_NAMES["Exchange Rate"]
+    if key in ("value [eur]", "value (eur)"):
+        return PORTFOLIO_DISPLAY_NAMES["Value EUR"]
     for internal, display in PORTFOLIO_DISPLAY_NAMES.items():
         d = display.lower()
         if key == d or key.startswith(d.split("[")[0].strip().lower()):
@@ -276,6 +284,7 @@ _PORTFOLIO_FORMATTERS: dict[str, Any] = {
     "Price": _fmt_price,
     "Value": _fmt_investment_placeholder,
     "Exchange Rate": _fmt_fx_rate,
+    "Value EUR": _fmt_investment_placeholder,
 }
 
 

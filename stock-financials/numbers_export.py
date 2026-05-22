@@ -11,7 +11,9 @@ from config import PORTFOLIO_DATA_START_ROW
 from numbers_format import (
     apply_column_format,
     apply_column_formats,
+    apply_eur_currency_column_format,
     coerce_cell_value,
+    copy_column_format_from_reference,
     infer_column_format,
 )
 from portfolio_formulas import apply_portfolio_formulas_numbers
@@ -31,6 +33,7 @@ PORTFOLIO_DATA_ROW_INDEX = PORTFOLIO_DATA_START_ROW - 1
 PORTFOLIO_PRICE_COL = 12
 PORTFOLIO_VALUE_COL = 13
 PORTFOLIO_EXCHANGE_RATE_COL = 14  # column O — current EUR→local
+PORTFOLIO_VALUE_EUR_COL = 15  # column P — Value [EUR] = N / O
 
 
 def _write_cell(table, row: int, col: int, value) -> None:
@@ -75,6 +78,8 @@ def _header_column_map(table, expected_columns: list[str]) -> dict[str, int]:
     aliases["prices"] = PORTFOLIO_DISPLAY_NAMES["Price"]
     aliases["value"] = PORTFOLIO_DISPLAY_NAMES["Value"]
     aliases["exchange rate"] = PORTFOLIO_DISPLAY_NAMES["Exchange Rate"]
+    aliases["value [eur]"] = PORTFOLIO_DISPLAY_NAMES["Value EUR"]
+    aliases["value (eur)"] = PORTFOLIO_DISPLAY_NAMES["Value EUR"]
 
     mapping: dict[str, int] = {}
     for c in range(table.num_cols):
@@ -103,6 +108,79 @@ def _sync_portfolio_headers(
     for col_name in columns:
         if col_name in col_map:
             table.write(PORTFOLIO_HEADER_ROW, col_map[col_name], col_name)
+    value_header = PORTFOLIO_DISPLAY_NAMES["Value"]
+    table.write(
+        PORTFOLIO_HEADER_ROW,
+        col_map.get(value_header, PORTFOLIO_VALUE_COL),
+        value_header,
+    )
+    value_eur_header = PORTFOLIO_DISPLAY_NAMES["Value EUR"]
+    table.write(
+        PORTFOLIO_HEADER_ROW,
+        col_map.get(value_eur_header, PORTFOLIO_VALUE_EUR_COL),
+        value_eur_header,
+    )
+
+
+def apply_portfolio_column_formats_numbers(
+    path: Path,
+    portfolio_df: pd.DataFrame,
+    *,
+    portfolio_sheet: str = "portfolio",
+) -> None:
+    """Re-apply formats after formulas (Value [EUR] matches Investment [EUR])."""
+    from numbers_parser import Document
+
+    if portfolio_df.empty:
+        return
+
+    path = path.expanduser()
+    doc = Document(path)
+    sheet = _sheet_by_name(doc, portfolio_sheet)
+    if sheet is None or not sheet.tables:
+        return
+
+    table = sheet.tables[0]
+    columns = list(portfolio_df.columns)
+    col_map = _header_column_map(table, columns)
+    num_rows = len(portfolio_df)
+
+    for col in columns:
+        if col in col_map:
+            apply_column_format(
+                table,
+                col_map[col],
+                col,
+                data_start_row=PORTFOLIO_DATA_ROW_INDEX,
+                num_rows=num_rows,
+            )
+
+    inv_eur = PORTFOLIO_DISPLAY_NAMES["Investment EUR"]
+    val_eur = PORTFOLIO_DISPLAY_NAMES["Value EUR"]
+    if inv_eur in col_map:
+        apply_eur_currency_column_format(
+            table,
+            col_map[inv_eur],
+            data_start_row=PORTFOLIO_DATA_ROW_INDEX,
+            num_rows=num_rows,
+        )
+    if inv_eur in col_map and val_eur in col_map:
+        if not copy_column_format_from_reference(
+            table,
+            ref_col=col_map[inv_eur],
+            target_col=col_map[val_eur],
+            data_start_row=PORTFOLIO_DATA_ROW_INDEX,
+            num_rows=num_rows,
+        ):
+            apply_eur_currency_column_format(
+                table,
+                col_map[val_eur],
+                data_start_row=PORTFOLIO_DATA_ROW_INDEX,
+                num_rows=num_rows,
+            )
+
+    doc.save(path)
+    logger.info("Applied portfolio column formats (%d row(s))", num_rows)
 
 
 def _write_portfolio_table(table, df: pd.DataFrame) -> None:
@@ -128,6 +206,15 @@ def _write_portfolio_table(table, df: pd.DataFrame) -> None:
         num_rows=len(df),
         col_map=col_map,
     )
+    value_header = PORTFOLIO_DISPLAY_NAMES["Value"]
+    if value_header in df.columns:
+        apply_column_format(
+            table,
+            col_map.get(value_header, PORTFOLIO_VALUE_COL),
+            value_header,
+            data_start_row=PORTFOLIO_DATA_ROW_INDEX,
+            num_rows=len(df),
+        )
     _write_price_column_m(table, df, col_map)
 
 
@@ -250,6 +337,9 @@ def update_portfolio_sheet_only(
     apply_portfolio_formulas_numbers(
         path, portfolio_sheet=portfolio_sheet, num_data_rows=len(portfolio_df)
     )
+    apply_portfolio_column_formats_numbers(
+        path, portfolio_df, portfolio_sheet=portfolio_sheet
+    )
     return path
 
 
@@ -281,5 +371,8 @@ def save_to_numbers(
     doc.save(path)
     apply_portfolio_formulas_numbers(
         path, portfolio_sheet=portfolio_sheet, num_data_rows=len(portfolio_df)
+    )
+    apply_portfolio_column_formats_numbers(
+        path, portfolio_df, portfolio_sheet=portfolio_sheet
     )
     return path

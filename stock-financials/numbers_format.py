@@ -11,6 +11,12 @@ import pandas as pd
 # Numbers date/time directives (see numbers_parser.constants)
 DATETIME_FORMAT_UTC = "yyyy-MM-dd HH:mm:ss"
 
+PORTFOLIO_EUR_CURRENCY_KWARGS = {
+    "currency": "EUR",
+    "decimal_places": 2,
+    "show_thousands_separator": True,
+}
+
 
 @dataclass(frozen=True)
 class ColumnFormat:
@@ -156,6 +162,62 @@ def _format_kwargs(fmt: ColumnFormat) -> tuple[str, dict[str, Any]]:
             "show_thousands_separator": fmt.thousands,
         }
     return "text", {}
+
+
+def apply_eur_currency_column_format(
+    table,
+    col: int,
+    *,
+    data_start_row: int,
+    num_rows: int,
+) -> None:
+    """EUR currency format (same as Investment [EUR])."""
+    for r in range(num_rows):
+        try:
+            table.set_cell_formatting(
+                data_start_row + r,
+                col,
+                "currency",
+                **PORTFOLIO_EUR_CURRENCY_KWARGS,
+            )
+        except (TypeError, IndexError, ValueError):
+            pass
+
+
+def copy_column_format_from_reference(
+    table,
+    *,
+    ref_col: int,
+    target_col: int,
+    data_start_row: int,
+    num_rows: int,
+) -> bool:
+    """Copy format from reference column (e.g. Investment [EUR] → Value [EUR])."""
+    try:
+        from numbers_parser.constants import CellType, FormattingType
+    except ImportError:
+        return False
+
+    ref_cell = table._data[data_start_row][ref_col]
+    copied = False
+    for r in range(num_rows):
+        cell = table._data[data_start_row + r][target_col]
+        currency_id = getattr(ref_cell, "_currency_format_id", None)
+        if currency_id is not None:
+            cell._type = CellType.CURRENCY
+            cell._set_formatting(
+                currency_id,
+                FormattingType.CURRENCY,
+                is_currency=True,
+            )
+            copied = True
+        elif getattr(ref_cell, "_num_format_id", None) is not None:
+            cell._set_formatting(
+                ref_cell._num_format_id,
+                FormattingType.NUMBER,
+            )
+            copied = True
+    return copied
 
 
 def apply_column_format(
