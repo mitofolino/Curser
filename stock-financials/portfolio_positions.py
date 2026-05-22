@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+import re
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -12,6 +13,7 @@ import pandas as pd
 from config import OUTPUT_DIR, PORTFOLIO_NUMBERS_PATH, PORTFOLIO_SHEET_NAME
 from fx_rates import (
     eur_to_local_rate_on_date,
+    parse_open_date_for_fx,
     prefetch_rates_to_eur,
     prefetch_rates_to_eur_on_dates,
 )
@@ -220,8 +222,32 @@ def _fmt_fees(value: Any) -> str:
         return str(value)
 
 
+def _format_open_date_utc(value: datetime) -> str:
+    if value.tzinfo is not None:
+        value = value.astimezone(timezone.utc).replace(tzinfo=None)
+    return value.replace(microsecond=0).strftime("%Y-%m-%d %H:%M:%S")
+
+
 def _fmt_open_date(value: Any) -> str:
-    return _fmt_text(value)
+    if _is_blank(value):
+        return ""
+    if isinstance(value, datetime):
+        return _format_open_date_utc(value)
+    if isinstance(value, date):
+        return _format_open_date_utc(datetime.combine(value, datetime.min.time()))
+    if isinstance(value, pd.Timestamp):
+        return _format_open_date_utc(value.to_pydatetime())
+    text = _fmt_text(value)
+    if not text:
+        return ""
+    normalized = text.replace("Z", "+00:00")
+    try:
+        return _format_open_date_utc(datetime.fromisoformat(normalized))
+    except ValueError:
+        pass
+    if len(text) >= 10 and text[4] == "-":
+        return text[:10] + " 00:00:00" if len(text) == 10 else text[:19]
+    return text
 
 
 def _fmt_fx_rate(value: Any) -> str:
@@ -258,6 +284,48 @@ def _fmt_position_id(value: Any) -> str:
     return str(value).strip()
 
 
+_IBKR_POSITION_ID_RE = re.compile(r"^([A-Za-z0-9]+):(\d+)$")
+
+
+def _normalize_ibkr_position_id(position_id: str) -> str:
+    """Canonical form: U18476088:559289446 (no float/scientific conId)."""
+    pid = _fmt_position_id(position_id)
+    if not pid:
+        return ""
+    m = _IBKR_POSITION_ID_RE.match(pid)
+    if m:
+        return f"{m.group(1).upper()}:{int(m.group(2))}"
+    if pid.isdigit():
+        return str(int(pid))
+    return pid
+
+
+def _position_id_lookup_keys(platform: str, position_id: Any) -> list[str]:
+    """Keys used in preserved open-date map (account:conId + bare conId for IBKR)."""
+    pid = _fmt_position_id(position_id)
+    if not pid:
+        return []
+    if platform == "IBKR":
+        norm = _normalize_ibkr_position_id(pid)
+        keys = [norm] if norm else []
+        if ":" in norm:
+            keys.append(norm.split(":", 1)[1])
+        elif norm.isdigit():
+            keys.append(norm)
+        return keys
+    return [pid]
+
+
+def _resolve_platform(platform: Any, position_id: Any) -> str:
+    resolved = _fmt_platform(platform)
+    if resolved:
+        return resolved
+    pid = _fmt_position_id(position_id)
+    if pid and _IBKR_POSITION_ID_RE.match(pid):
+        return "IBKR"
+    return ""
+
+
 def _to_float(value: Any) -> float | None:
     if _is_blank(value):
         return None
@@ -276,6 +344,9 @@ def enrich_portfolio_fields(df: pd.DataFrame) -> pd.DataFrame:
     from market_source import currency_for_market_source, normalize_market_source
 
     now = datetime.now(timezone.utc).replace(microsecond=0).strftime("%Y-%m-%d %H:%M:%S")
+
+    currencies: set[str | None] = set()
+    historical_pairs: set[tuple[str | None, Any]] = set()
     for idx in out.index:
         ticker = out.at[idx, "Ticker"]
         source = normalize_market_source(out.at[idx, "Source"])
@@ -287,7 +358,17 @@ def enrich_portfolio_fields(df: pd.DataFrame) -> pd.DataFrame:
             fallback=out.at[idx, "Currency"],
         )
         out.at[idx, "Currency"] = currency
+        currencies.add(currency)
+        open_day = parse_open_date_for_fx(out.at[idx, "Open Date"])
+        if open_day:
+            historical_pairs.add((currency, open_day))
+    prefetch_rates_to_eur_on_dates(historical_pairs)
+    prefetch_rates_to_eur(currencies)
+
+    for idx in out.index:
+        currency = out.at[idx, "Currency"]
         open_date = out.at[idx, "Open Date"]
+        # Open FX: rate on open date; if missing/invalid, latest rate (same as column O).
         fx = eur_to_local_rate_on_date(currency, open_date)
         out.at[idx, "Open Exchange Rate"] = fx
         out.at[idx, "Exchange Rate"] = eur_to_local_rate_on_date(currency, None)
@@ -306,14 +387,6 @@ def enrich_portfolio_fields(df: pd.DataFrame) -> pd.DataFrame:
         else:
             out.at[idx, "Investment"] = None
             out.at[idx, "Investment EUR"] = None
-
-    pairs = {
-        (out.at[idx, "Currency"], str(out.at[idx, "Open Date"] or "")[:10])
-        for idx in out.index
-        if out.at[idx, "Currency"]
-    }
-    prefetch_rates_to_eur_on_dates(pairs)
-    prefetch_rates_to_eur({out.at[idx, "Currency"] for idx in out.index})
 
     from portfolio_quotes import fetch_last_prices
 
@@ -406,9 +479,53 @@ def _align_template_columns(df: pd.DataFrame) -> pd.DataFrame:
     return out[PORTFOLIO_COLUMNS]
 
 
+def _portfolio_table_headers(table) -> list[str]:
+    return [
+        str(table.cell(0, c).value or "").strip()
+        for c in range(table.num_cols)
+    ]
+
+
+def _is_portfolio_positions_table(headers: list[str]) -> bool:
+    """Distinguish portfolio sheet from summary (both may have Ticker)."""
+    header_lower = [h.lower() for h in headers]
+    has_symbol = "ticker" in header_lower or "instrument name" in header_lower
+    has_portfolio_cols = any(
+        token in header_lower
+        for token in (
+            "position id",
+            "used platform",
+            "open date [utc]",
+            "shares [units]",
+        )
+    )
+    return has_symbol and has_portfolio_cols
+
+
+def _dataframe_from_numbers_table(table) -> pd.DataFrame | None:
+    if table.num_rows < 2:
+        return None
+    headers = _portfolio_table_headers(table)
+    if not _is_portfolio_positions_table(headers):
+        return None
+    rows = []
+    for r in range(1, table.num_rows):
+        values = [table.cell(r, c).value for c in range(table.num_cols)]
+        if not any(v is not None and str(v).strip() for v in values):
+            continue
+        rows.append(
+            {
+                headers[c]: values[c]
+                for c in range(len(headers))
+                if headers[c]
+            }
+        )
+    return pd.DataFrame(rows) if rows else None
+
+
 def read_portfolio_template(path: Path | None = None) -> pd.DataFrame | None:
     """
-    Load header + example row from portfolio_summary.numbers (or .xlsx export).
+    Load rows from the portfolio sheet in portfolio_summary.numbers (or .xlsx).
     Returns None if the file is missing or unreadable.
     """
     path = path or PORTFOLIO_NUMBERS_PATH
@@ -429,32 +546,27 @@ def read_portfolio_template(path: Path | None = None) -> pd.DataFrame | None:
         except OSError as e:
             logger.warning("Cannot read %s: %s", path, e)
             return None
+
+        target = PORTFOLIO_SHEET_NAME.strip().lower()
+        for sheet in doc.sheets:
+            if sheet.name.strip().lower() != target:
+                continue
+            for table in sheet.tables:
+                df = _dataframe_from_numbers_table(table)
+                if df is not None:
+                    return df
+            return None
+
         for sheet in doc.sheets:
             for table in sheet.tables:
-                if table.num_rows < 2:
-                    continue
-                headers = [
-                    str(table.cell(0, c).value or "").strip()
-                    for c in range(table.num_cols)
-                ]
-                header_lower = [h.lower() for h in headers]
-                if "ticker" not in header_lower and "instrument name" not in header_lower:
-                    continue
-                rows = []
-                for r in range(1, table.num_rows):
-                    values = [
-                        table.cell(r, c).value for c in range(table.num_cols)
-                    ]
-                    if not any(v is not None and str(v).strip() for v in values):
-                        continue
-                    row = {
-                        headers[c]: values[c]
-                        for c in range(len(headers))
-                        if headers[c]
-                    }
-                    rows.append(row)
-                if rows:
-                    return pd.DataFrame(rows)
+                df = _dataframe_from_numbers_table(table)
+                if df is not None:
+                    logger.warning(
+                        "Sheet '%s' not found; read portfolio data from '%s'",
+                        PORTFOLIO_SHEET_NAME,
+                        sheet.name,
+                    )
+                    return df
         return None
 
     if suffix in (".xlsx", ".xlsm"):
@@ -481,6 +593,7 @@ def load_preserved_open_dates(path: Path | None = None) -> dict[tuple[str, str],
     Read Open Date from the existing portfolio sheet before it is overwritten.
 
     Keys: (Used Platform, Position ID) and (Used Platform, Ticker).
+    IBKR rows always keep these dates on update when the position is still held.
     """
     raw = read_portfolio_template(path)
     if raw is None or raw.empty:
@@ -496,16 +609,16 @@ def load_preserved_open_dates(path: Path | None = None) -> dict[tuple[str, str],
 
     preserved: dict[tuple[str, str], str] = {}
     for _, row in df.iterrows():
-        platform = _fmt_platform(row.get("Used Platform"))
+        pos_id = row.get("Position ID")
+        platform = _resolve_platform(row.get("Used Platform"), pos_id)
         open_date = row.get("Open Date")
         if not platform or _is_blank(open_date):
             continue
         od = _fmt_open_date(open_date)
         if not od:
             continue
-        pos_id = row.get("Position ID")
-        if not _is_blank(pos_id):
-            preserved[(platform, str(pos_id).strip())] = od
+        for key in _position_id_lookup_keys(platform, pos_id):
+            preserved[(platform, key)] = od
         ticker = row.get("Ticker")
         if not _is_blank(ticker):
             preserved[(platform, str(ticker).strip().upper())] = od
@@ -516,6 +629,22 @@ def load_preserved_open_dates(path: Path | None = None) -> dict[tuple[str, str],
     return preserved
 
 
+def _lookup_preserved_open_date(
+    row: dict[str, Any], preserved: dict[tuple[str, str], str]
+) -> str | None:
+    platform = _resolve_platform(row.get("Used Platform"), row.get("Position ID"))
+    if not platform:
+        return None
+    for key in _position_id_lookup_keys(platform, row.get("Position ID")):
+        od = preserved.get((platform, key))
+        if od:
+            return od
+    ticker = row.get("Ticker")
+    if not _is_blank(ticker):
+        return preserved.get((platform, str(ticker).strip().upper()))
+    return None
+
+
 def _apply_preserved_open_dates(
     rows: list[dict[str, Any]], preserved: dict[tuple[str, str], str]
 ) -> None:
@@ -523,21 +652,20 @@ def _apply_preserved_open_dates(
         return
     filled = 0
     for row in rows:
+        platform = _resolve_platform(row.get("Used Platform"), row.get("Position ID"))
+        od = _lookup_preserved_open_date(row, preserved)
+        if not od:
+            continue
+        # IBKR: keep manually entered dates from the sheet (do not replace with API).
+        if platform == "IBKR":
+            if row.get("Open Date") != od:
+                row["Open Date"] = od
+                filled += 1
+            continue
         if not _is_blank(row.get("Open Date")):
             continue
-        platform = _fmt_platform(row.get("Used Platform"))
-        if not platform:
-            continue
-        pos_id = row.get("Position ID")
-        ticker = row.get("Ticker")
-        od = None
-        if not _is_blank(pos_id):
-            od = preserved.get((platform, str(pos_id).strip()))
-        if not od and not _is_blank(ticker):
-            od = preserved.get((platform, str(ticker).strip().upper()))
-        if od:
-            row["Open Date"] = od
-            filled += 1
+        row["Open Date"] = od
+        filled += 1
     if filled:
         logger.info("Restored open date on %d row(s) from previous sheet", filled)
 

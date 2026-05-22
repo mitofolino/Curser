@@ -79,7 +79,7 @@ python main.py --cleanup   # remove old statements/ and sec/ subfolders
 
 `portfolio_summary.numbers` (default) includes a **`portfolio`** table with columns:
 
-`Ticker`, `Instrument Name`, `Source` (listing exchange, e.g. NASDAQ, XETRA), `Currency`, `Shares [units]`, `Open Date [UTC]`, `Buy Price [local]`, `Total Fees [local]`, `Investment [local]` (= Shares × Buy Price − Fees), `Open Exchange Rate [EUR→local]` (Frankfurter rate on open date), `Investment [EUR]` (= Investment ÷ Open Exchange Rate), `Update Date [UTC]`
+`Ticker`, `Instrument Name`, `Source` (listing exchange, e.g. NASDAQ, XETRA), `Currency`, `Shares [units]`, `Open Date [UTC]`, `Buy Price [local]`, `Total Fees [local]`, `Investment [local]` (= Shares × Buy Price − Fees), `Open Exchange Rate [EUR→local]` (Frankfurter rate on **Open Date [UTC]**; if that date is missing, the **current** rate), `Investment [EUR]` (= Investment ÷ Open Exchange Rate), `Update Date [UTC]`
 
 Configure brokers in `.env` (see `.env.example`). On each `python main.py` run, live positions are merged into that sheet.
 
@@ -96,7 +96,7 @@ Set `PORTFOLIO_OUTPUT=numbers` (default), `xlsx`, or `both` in `.env`. Per-ticke
 | **eToro** | `ETORO_ENABLED=true`, `ETORO_API_KEY`, correct `ETORO_API_URL` from eToro’s API docs for your account | Export positions CSV → `ETORO_CSV_PATH` |
 | **IBKR** | `IBKR_ENABLED=true`, **TWS** or **IB Gateway** running with API enabled (`IBKR_HOST` / `IBKR_PORT`, default `127.0.0.1:7497` paper), optional `IBKR_ACCOUNT_ID` | Flex/Activity export CSV → `IBKR_CSV_PATH` |
 
-IBKR uses **[ib_insync](https://ib-insync.readthedocs.io/)** (`ib.positions()`). **Open Date [UTC]** is *not* on the position snapshot. The pipeline tries, in order: (1) TWS execution history (`ib.fills()` + `reqExecutions`, usually only **recent** trades), (2) **`reqCompletedOrders`** if `IBKR_READONLY=false`, (3) **values already in the portfolio sheet** (preserved on each run), (4) **`IBKR_CSV_PATH`** with an Open Date column (Activity/Flex export for full history). Commissions are not on the position snapshot — fees export as `0` unless you use CSV.
+IBKR uses **[ib_insync](https://ib-insync.readthedocs.io/)** (`ib.positions()`). **Open Date [UTC]** is not on the position snapshot — enter it manually in the portfolio sheet. On each run, existing **Open Date [UTC]** values for IBKR positions are **preserved** (matched by Position ID or Ticker) and are not overwritten by the API. Optional **`IBKR_CSV_PATH`** can supply dates when not using the live API. Commissions are not on the position snapshot — fees export as `0` unless you use CSV.
 
 ## Privacy / Git
 

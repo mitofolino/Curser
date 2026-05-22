@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import logging
+import math
+import re
+from datetime import date, datetime
 from typing import Any
 
 import requests
@@ -19,6 +22,33 @@ _CURRENCY_ALIASES = {
     "GBX": "GBP",  # pence quoted; amounts from Yahoo are usually in GBP not pence
     "GBp": "GBP",
 }
+
+
+_ISO_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
+def parse_open_date_for_fx(open_date: Any) -> str | None:
+    """
+    Return YYYY-MM-DD for Frankfurter historical rates, or None if missing/invalid.
+
+    None means use the latest (current) exchange rate.
+    """
+    if open_date is None:
+        return None
+    if isinstance(open_date, float) and math.isnan(open_date):
+        return None
+    if isinstance(open_date, datetime):
+        return open_date.strftime("%Y-%m-%d")
+    if isinstance(open_date, date):
+        return open_date.isoformat()
+    text = str(open_date).strip()
+    if not text or text.lower() in ("nan", "nat", "none"):
+        return None
+    if len(text) >= 10 and text[4] == "-":
+        day = text[:10]
+        if _ISO_DATE_RE.match(day):
+            return day
+    return None
 
 
 def normalize_currency(code: Any) -> str | None:
@@ -65,22 +95,37 @@ def _fetch_rate_to_eur(code: str, *, on_date: str | None = None) -> float | None
 
 
 def rate_to_eur_on_date(currency: str | None, open_date: Any) -> float | None:
-    """Multiplier: amount in *currency* × rate = amount in EUR (for *open_date*, UTC date)."""
+    """
+    Multiplier: amount in *currency* × rate = amount in EUR.
+
+    Uses the rate on *open_date* (UTC calendar day). If the date is missing or
+    invalid, or no historical quote exists, uses the latest rate.
+    """
     code = normalize_currency(currency)
     if code is None:
         return None
     if code == "EUR":
         return 1.0
-    if open_date is None or open_date == "":
-        return rate_to_eur(code)
-    text = str(open_date).strip()
-    on_date = text[:10] if len(text) >= 10 else text
+    on_date = parse_open_date_for_fx(open_date)
+    if on_date is None:
+        return _fetch_rate_to_eur(code)
     rate = _fetch_rate_to_eur(code, on_date=on_date)
-    return rate if rate is not None else rate_to_eur(code)
+    if rate is not None:
+        return rate
+    logger.info(
+        "FX %s->EUR: no historical rate on %s; using latest",
+        code,
+        on_date,
+    )
+    return _fetch_rate_to_eur(code)
 
 
 def eur_to_local_rate_on_date(currency: str | None, open_date: Any) -> float | None:
-    """How many units of *local* currency per 1 EUR (for open-date FX)."""
+    """
+    How many units of *local* currency per 1 EUR.
+
+    Uses the open-date rate when *open_date* is set; otherwise the latest rate.
+    """
     rate = rate_to_eur_on_date(currency, open_date)
     if rate is None or rate == 0:
         return None
@@ -89,10 +134,12 @@ def eur_to_local_rate_on_date(currency: str | None, open_date: Any) -> float | N
     return 1.0 / rate
 
 
-def prefetch_rates_to_eur_on_dates(pairs: set[tuple[str | None, str]]) -> None:
-    """Warm cache for (currency, YYYY-MM-DD) pairs."""
+def prefetch_rates_to_eur_on_dates(pairs: set[tuple[str | None, Any]]) -> None:
+    """Warm cache for (currency, open_date) pairs with valid historical dates."""
     for currency, open_date in pairs:
-        rate_to_eur_on_date(currency, open_date)
+        on_date = parse_open_date_for_fx(open_date)
+        if on_date:
+            rate_to_eur_on_date(currency, on_date)
 
 
 def rate_to_eur(currency: str | None) -> float | None:
